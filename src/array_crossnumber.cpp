@@ -1,11 +1,11 @@
-#include "crossnumber.h"
-
 #include <algorithm>
 #include <array>
 #include <vector>
 
+#include "crossnumber.h"
 
-ArrayCrossNumber::ArrayCrossNumber(int width, int height) : CrossNumber(width, height) {
+ArrayCrossNumber::ArrayCrossNumber(int width, int height)
+    : CrossNumber(width, height) {
   this->width = width;
   this->height = height;
   std::fill(std::begin(layout), std::end(layout), -2);
@@ -21,7 +21,7 @@ void ArrayCrossNumber::define_squares(std::vector<int> squares) {
   // layout - 0 for valid square without hint
   // layout - -1 for invalid square
 
-  // value - unassigned for valid square
+  // value - -2 for squares where numbers can go
   // value - -1 for invalid square
   for (int i = 0; i < squares.size(); i++) {
     layout[i] = squares[i];
@@ -33,6 +33,7 @@ void ArrayCrossNumber::define_squares(std::vector<int> squares) {
     }
   }
 }
+
 std::string ArrayCrossNumber::display_layout() {
   std::string output = "";
 
@@ -64,6 +65,7 @@ std::string ArrayCrossNumber::display_layout() {
   output += "-";
   return output;
 }
+
 std::string ArrayCrossNumber::display_value() {
   std::string output = "";
 
@@ -99,8 +101,9 @@ std::string ArrayCrossNumber::display_value() {
 
 std::string ArrayCrossNumber::display_digit_count() {
   std::string output = "";
-  for (int i = 0; i<10; i++) {
-    output += std::to_string(std::count(std::begin(this->value), std::end(this->value), i));
+  for (int i = 0; i < 10; i++) {
+    output += std::to_string(
+        std::count(std::begin(this->value), std::end(this->value), i));
     output += " | ";
   }
 
@@ -108,7 +111,7 @@ std::string ArrayCrossNumber::display_digit_count() {
 }
 
 void ArrayCrossNumber::set_value(int val, int x_pos, int y_pos, int length,
-                            bool is_horizontal) {
+                                 bool is_horizontal) {
   if (is_horizontal) {
     for (int i = 0; i < length; i++) {
       value[y_pos * width + (x_pos + i)] =
@@ -122,7 +125,7 @@ void ArrayCrossNumber::set_value(int val, int x_pos, int y_pos, int length,
   }
 }
 int ArrayCrossNumber::get_value(int x_pos, int y_pos, int length,
-                           bool is_horizontal) {
+                                bool is_horizontal) {
   int sum = 0;
   if (is_horizontal) {
     for (int i = 0; i < length; i++) {
@@ -136,7 +139,7 @@ int ArrayCrossNumber::get_value(int x_pos, int y_pos, int length,
   return sum;
 }
 void ArrayCrossNumber::clear_value(int x_pos, int y_pos, int length,
-                              bool is_horizontal) {
+                                   bool is_horizontal) {
   if (is_horizontal) {
     for (int i = 0; i < length; i++) {
       value[y_pos * width + (x_pos + i)] = -2;
@@ -147,8 +150,8 @@ void ArrayCrossNumber::clear_value(int x_pos, int y_pos, int length,
     }
   }
 }
-bool ArrayCrossNumber::is_possible_value(int val, int x_pos, int y_pos, int length,
-                                    bool is_horizontal) {
+bool ArrayCrossNumber::is_possible_value(int val, int x_pos, int y_pos,
+                                         int length, bool is_horizontal) {
   bool valid = true;
   if (is_horizontal) {
     for (int i = 0; i < length; i++) {
@@ -181,6 +184,8 @@ bool ArrayCrossNumber::is_possible_value(int val, Hint& hint) {
 }
 
 void ArrayCrossNumber::load_hint(Hint& hint) {
+  // try and find the x_pos and y_pos of the hint based on the identifier
+  // if not found, throw error
   bool found = false;
   for (int i = 0; i < this->width * this->height; i++) {
     if (layout[i] == hint.identifier) {
@@ -195,6 +200,7 @@ void ArrayCrossNumber::load_hint(Hint& hint) {
     throw std::logic_error("Hint not in layout initially defined");
   }
 
+  // find the length of the hint
   int length = 0;
 
   for (int i = 0; i < this->height; i++) {
@@ -217,7 +223,9 @@ void ArrayCrossNumber::load_hint(Hint& hint) {
   }
 
   hint.length = length;
+  // based on the length of the hint, fill
   hint.possible_values = {};
+  hint.possible_values.reserve(ipow(10, length) - ipow(10, length - 1));
   for (int i = ipow(10, length - 1); i < ipow(10, length); i++) {
     hint.possible_values.push_back(i);
   }
@@ -291,10 +299,10 @@ bool ArrayCrossNumber::digit_shake() {
   }
 
   double init_product = 1.0;
-  for (Hint& h: this ->hints) {
+  for (Hint& h : this->hints) {
     init_product *= h.number_possible_values;
   }
-    // std::cout << "possible combinations: " << init_product << std::endl;
+  // std::cout << "possible combinations: " << init_product << std::endl;
 
   for (Hint& h : this->hints) {
     int length = h.length;
@@ -330,12 +338,12 @@ bool ArrayCrossNumber::digit_shake() {
   }
 
   double final_product = 1.0;
-  for (Hint& h: this ->hints) {
+  for (Hint& h : this->hints) {
     final_product *= h.number_possible_values;
   }
-  // std::cout << "reduced from " << log10(init_product) << " to " << log10(final_product) << std::endl;
+  // std::cout << "reduced from " << log10(init_product) << " to " <<
+  // log10(final_product) << std::endl;
   return init_product == final_product;
-
 }
 
 int ArrayCrossNumber::count_digits(int n) {

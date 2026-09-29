@@ -64,6 +64,8 @@ void SolverOne::solve(ArrayCrossNumber crossnumber) {
             if (crossnumber.get_value(8, 6, 2, true) ==
                 dsum(crossnumber.get_value(0, 4, 2, true))) {
               std::cout << crossnumber.display_value() << std::endl;
+              std::cout << crossnumber.display_digit_count() << std::endl;
+
             }
           };
           crossnumber.clear_values(guesses, number_guesses);

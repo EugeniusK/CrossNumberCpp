@@ -1,0 +1,38 @@
+<program>       ::= <stmt>*
+<stmt>          ::= <var_decl> | <assign_stmt> | <if_stmt> | <for_stmt> | <print_stmt> | <block_stmt>
+
+<block_stmt>     ::= "{" <stmt>* "}"
+<var_decl>       ::= "let" <ID> "=" <expr> ";"
+<assign_stmt>    ::= <ID> "=" <expr> ";"
+<if_stmt>        ::= "if" "(" <expr> ")" <stmt> ("else" <stmt>)?
+<for_stmt>       ::= "for" "(" (<var_decl> | <assign_stmt>) <expr> ";" <assign_stmt_no_semi> ")" <stmt>
+<assign_stmt_no_semi> ::= <ID> "=" <expr>
+<print_stmt>     ::= "print" "(" <expr> ")" ";"
+
+
+<expr>           ::= <logic_or>
+// 15 complete
+<logic_or>       ::= <logic_and> ("||" <logic_and>)*
+// 14 complete
+<logic_and>      ::= <equality> ("&&" <equality>)*
+// 13 MISSING
+// 12 MISSING
+// 11 MISSING
+// 10 complete
+<equality>       ::= <relational> (("==" | "!=") <relational>)*
+// 9 complete
+<relational>     ::= <additive> (("<" | "<=" | ">" | ">=") <additive>)*
+// 8 MISSING
+// 7 MISSING
+// 6 complete
+<additive>       ::= <multiplicative> (("+" | "-") <multiplicative>)*
+// 5 complete
+<multiplicative> ::= <unary> (("*" | "/" | "%") <unary>)*
+// 4 MISSING
+// 3 partial - missing prefix "++", prefix "--", ~, cast, indirection, address-of, reflection, size-of, await-expression, dynamic memory (de)allocation
+<unary>          ::= ("+" | "-" | "!") <unary> | <primary>
+<primary>        ::= <NUMBER> | <BOOLEAN> | <ID> | "(" <expr> ")"
+
+<BOOLEAN>        ::= "true" | "false"
+<NUMBER>         ::= [0-9]+
+<ID>             ::= ([a-z] | [A-Z] | "_")+ ([a-z] | [A-Z] | [0-9] | "_" )*

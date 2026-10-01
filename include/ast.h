@@ -16,9 +16,11 @@ class Environment {
   int get_var(std::string id);
   void set_var(std::string id, int val);
   void initialise_output_array(int len, int val);
+  void reset_output_array();
   int get_output_array(int idx);
   void set_output_array(int idx, int val);
   void initialise_tmp_array(int len, int val);
+  void reset_tmp_array();
   int get_tmp_array(int idx);
   void set_tmp_array(int idx, int val);
   std::unordered_map<std::string, int>::iterator invalid_var;
@@ -44,6 +46,7 @@ class LiteralNode : public ExprNode {
   int value;
 };
 
+// "x"
 class VariableNode : public ExprNode {
  public:
   VariableNode(std::string n);
@@ -75,6 +78,7 @@ class BinaryOpNode : public ExprNode {
   std::unique_ptr<ExprNode> operand2;
 };
 
+// tmp[x] or output[x]
 class IndexReadNode : public ExprNode {
  public:
   IndexReadNode(std::string n, std::unique_ptr<ExprNode> i);
@@ -85,6 +89,7 @@ class IndexReadNode : public ExprNode {
   std::unique_ptr<ExprNode> expr;
 };
 
+// func(x,y)
 class FunctionCallNode : public ExprNode {
  public:
   FunctionCallNode(std::string n, std::vector<std::unique_ptr<ExprNode>> a);
@@ -110,6 +115,7 @@ class BlockStmtNode : public StmtNode {
   std::vector<std::unique_ptr<StmtNode>> statements;
 };
 
+// let x = 5;
 class VarDeclNode : public StmtNode {
  public:
   VarDeclNode(std::string n, std::unique_ptr<ExprNode> i);
@@ -120,6 +126,7 @@ class VarDeclNode : public StmtNode {
   std::unique_ptr<ExprNode> init;
 };
 
+// x = 5;
 class AssignStmtNode : public StmtNode {
  public:
   AssignStmtNode(std::string n, std::unique_ptr<ExprNode> e);
@@ -130,6 +137,7 @@ class AssignStmtNode : public StmtNode {
   std::unique_ptr<ExprNode> expr;
 };
 
+// tmp[x] = 5;
 class IndexAssignStmtNode : public StmtNode {
  public:
   IndexAssignStmtNode(std::string n, std::unique_ptr<ExprNode> i,
@@ -142,6 +150,7 @@ class IndexAssignStmtNode : public StmtNode {
   std::unique_ptr<ExprNode> val_expr;
 };
 
+// print(x);
 class PrintStmtNode : public StmtNode {
  public:
   explicit PrintStmtNode(std::unique_ptr<ExprNode> e);
@@ -175,6 +184,16 @@ class ForStmtNode : public StmtNode {
   std::unique_ptr<StmtNode> init;
   std::unique_ptr<ExprNode> condition;
   std::unique_ptr<StmtNode> update;
+  std::unique_ptr<StmtNode> body;
+};
+
+class WhileStmtNode : public StmtNode {
+ public:
+  WhileStmtNode(std::unique_ptr<ExprNode> cond, std::unique_ptr<StmtNode> b);
+  void execute(Environment& env);
+
+ private:
+  std::unique_ptr<ExprNode> condition;
   std::unique_ptr<StmtNode> body;
 };
 

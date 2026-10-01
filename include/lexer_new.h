@@ -28,6 +28,7 @@ struct Token {
 class Lexer {
  public:
   Lexer(std::string source);
+  void reset();
   Token next_token();
 
  private:

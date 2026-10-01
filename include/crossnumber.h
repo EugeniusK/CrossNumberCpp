@@ -38,18 +38,19 @@ class CrossNumber {
   // returns currently stored digit count from 0~9, separated by |
   virtual std::string display_digit_count() = 0;
 
-
   // set of methods for adding guesses to the crossnumber
   // requires x_pos, y_pos, length, is_horizontal for specific location
-  virtual void set_value(int val, int x_pos, int y_pos, int length, bool is_horizontal) = 0;
-  virtual int get_value(int x_pos, int y_pos, int length, bool is_horizontal) = 0;
-  virtual void clear_value(int x_pos, int y_pos, int length, bool is_horizontal) = 0;
-  virtual bool is_possible_value(int val, int x_pos, int y_pos, int length,
+  virtual void set_value(int val, int x_pos, int y_pos, int length,
                          bool is_horizontal) = 0;
-
+  virtual int get_value(int x_pos, int y_pos, int length,
+                        bool is_horizontal) = 0;
+  virtual void clear_value(int x_pos, int y_pos, int length,
+                           bool is_horizontal) = 0;
+  virtual bool is_possible_value(int val, int x_pos, int y_pos, int length,
+                                 bool is_horizontal) = 0;
 
   // set of methods for adding guesses to the crossnumber
-  // uses the Hint to specify the location   
+  // uses the Hint to specify the location
   virtual void set_value(int val, Hint& hint) = 0;
   virtual int get_value(Hint& hint) = 0;
   virtual void clear_value(Hint& hint) = 0;
@@ -58,7 +59,8 @@ class CrossNumber {
   // add new hint
   virtual void load_hint(Hint& hint) = 0;
 
-  // based on guesses and the possible values stored inside of them, attempt them
+  // based on guesses and the possible values stored inside of them, attempt
+  // them
   virtual bool try_values(int arr[], int count) = 0;
   virtual void apply_values(int arr[], int count) = 0;
   virtual void clear_values(int arr[], int count) = 0;
@@ -72,7 +74,6 @@ class CrossNumber {
 
   // hints that can be modified
   std::vector<std::reference_wrapper<Hint>> hints;
-
 };
 
 class ArrayCrossNumber : public CrossNumber {
@@ -82,9 +83,12 @@ class ArrayCrossNumber : public CrossNumber {
   std::string display_layout() override;
   std::string display_value() override;
   std::string display_digit_count() override;
-  void set_value(int val, int x_pos, int y_pos, int length, bool is_horizontal) override;
+  std::string debug();
+  void set_value(int val, int x_pos, int y_pos, int length,
+                 bool is_horizontal) override;
   int get_value(int x_pos, int y_pos, int length, bool is_horizontal) override;
-  void clear_value(int x_pos, int y_pos, int length, bool is_horizontal) override;
+  void clear_value(int x_pos, int y_pos, int length,
+                   bool is_horizontal) override;
   bool is_possible_value(int val, int x_pos, int y_pos, int length,
                          bool is_horizontal) override;
   void set_value(int val, Hint& hint) override;

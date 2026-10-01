@@ -59,13 +59,50 @@ void SolverOne::solve(ArrayCrossNumber crossnumber) {
       if (crossnumber.try_values(guesses, number_guesses)) {
         if (number_guesses == crossnumber.hints.size()) {
           crossnumber.apply_values(guesses, number_guesses);
+
+          bool with_valid_dependencies = true;
+          for (Hint& h : crossnumber.hints) {
+            if (h.get_if_has_dependencies()) {
+              for (std::string s : h.get_dependencies()) {
+                if (s[0] == 'a') {
+                  for (Hint& dependent_hint : crossnumber.hints) {
+                    if (dependent_hint.get_identifier() ==
+                            std::stoi(s.substr(1, s.size() - 1)) &&
+                        dependent_hint.get_is_horizontal()) {
+                      h.set_env(s, crossnumber.get_value(dependent_hint));
+                    }
+                  }
+                } else if (s[0] == 'd') {
+                  for (Hint& dependent_hint : crossnumber.hints) {
+                    if (dependent_hint.get_identifier() ==
+                            std::stoi(s.substr(1, s.size() - 1)) &&
+                        !dependent_hint.get_is_horizontal()) {
+                      h.set_env(s, crossnumber.get_value(dependent_hint));
+                    }
+                  }
+                } else if (s[0] == 'c') {
+                  h.set_env(
+                      s, crossnumber.count_digits(std::stoi(s.substr(1, 1))));
+                }
+              }
+              h.run_program_on_dependency();
+              if (h.get_output_array(crossnumber.get_value(h)) == 0) {
+                with_valid_dependencies = false;
+              }
+            }
+          }
+
+          if (with_valid_dependencies) {
+            std::cout << crossnumber.display_value() << std::endl;
+            std::cout << crossnumber.display_digit_count() << std::endl;
+          }
+
           if (get_nth_digit(crossnumber.get_value(1, 5, 3, true), 1, 3) ==
               19 - crossnumber.count_digits(9)) {
             if (crossnumber.get_value(8, 6, 2, true) ==
                 dsum(crossnumber.get_value(0, 4, 2, true))) {
               std::cout << crossnumber.display_value() << std::endl;
               std::cout << crossnumber.display_digit_count() << std::endl;
-
             }
           };
           crossnumber.clear_values(guesses, number_guesses);
@@ -88,5 +125,4 @@ void SolverOne::solve(ArrayCrossNumber crossnumber) {
   // std::cout << crossnumber.display_value() << std::endl;
   // std::cout << crossnumber.display_digit_count() << std::endl;
   crossnumber.clear_values(guesses, number_guesses);
-
 }

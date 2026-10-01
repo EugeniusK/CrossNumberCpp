@@ -625,7 +625,6 @@ std::vector<int> product_distinct_prime(int MAX_SIZE) {
   std::vector<int> arr;
   for (int p : prime_arr) {
     for (int q : prime_arr) {
-      // std::cout << p << " " << q << std::endl;
       if (p * q < MAX_SIZE) {
         if (p != q) {
           arr.push_back(p * q);

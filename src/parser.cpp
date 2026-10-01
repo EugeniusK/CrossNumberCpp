@@ -2,6 +2,10 @@
 #include "parser_new.h"
 void Parser::advance() { curr = lexer.next_token(); }
 
+void Parser::reset() {
+  lexer.reset();
+  advance();
+}
 void Parser::expect(const std::string& text) {
   if (curr.text != text)
     throw std::runtime_error("Expected '" + text + "', got '" + curr.text +
@@ -9,7 +13,18 @@ void Parser::expect(const std::string& text) {
   advance();
 };
 
-Parser::Parser(Lexer l) : lexer(std::move(l)) { advance(); }
+Parser::Parser(Lexer l) : lexer(std::move(l)) {
+  advance();
+  has_dependencies = false;
+}
+
+std::string Parser::print_list_variables() {
+  std::string output = "";
+  for (auto it = list_variables.begin(); it != list_variables.end(); it++) {
+    output = output + *it + " ";
+  };
+  return output;
+}
 
 std::unique_ptr<BlockStmtNode> Parser::parse_program() {
   auto prog = std::make_unique<BlockStmtNode>();
@@ -28,6 +43,9 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {
   }
   if (curr.text == "for") {
     return parse_for_stmt();
+  }
+  if (curr.text == "while") {
+    return parse_while_stmt();
   }
   if (curr.text == "print") {
     return parse_print_stmt();
@@ -143,6 +161,15 @@ std::unique_ptr<StmtNode> Parser::parse_for_stmt() {
                                        std::move(update), std::move(body));
 }
 
+std::unique_ptr<StmtNode> Parser::parse_while_stmt() {
+  advance();  // consume 'while'
+  expect("(");
+  auto cond = parse_expr();
+  expect(")");
+  auto body = parse_statement();
+  return std::make_unique<WhileStmtNode>(std::move(cond), std::move(body));
+}
+
 std::unique_ptr<ExprNode> Parser::parse_expr() { return parse_precedence_15(); }
 std::unique_ptr<ExprNode> Parser::parse_precedence_15() {
   auto node = parse_precedence_14();
@@ -239,6 +266,27 @@ std::unique_ptr<ExprNode> Parser::parse_primary() {
       expect(")");
       return std::make_unique<FunctionCallNode>(id, std::move(args));
     }
+
+    list_variables.insert(id);
+    if ((id[0] == 'a' || id[0] == 'd') && id.size() > 1) {
+      bool reserved = true;
+      for (int i = 1; i < id.size() - 1; i++) {
+        if (!std::isdigit(id[i])) {
+          reserved = false;
+          break;
+        }
+      }
+      if (reserved) {
+        has_dependencies = true;
+        list_dependencies.insert(id);
+      };
+    }
+
+    if (id[0] == 'c' && id.size() == 2 && std::isdigit(id[1])) {
+      has_dependencies = true;
+      list_dependencies.insert(id);
+    }
+
     return std::make_unique<VariableNode>(id);
   }
   if (curr.type == TokenType::OpenParen) {

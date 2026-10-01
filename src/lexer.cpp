@@ -1,7 +1,8 @@
+#include <iostream>
+
 #include "lexer_new.h"
-
 Lexer::Lexer(std::string source) : src(std::move(source)) {};
-
+void Lexer::reset() { pos = 0; }
 Token Lexer::next_token() {
   while (pos < src.size() && std::isspace(src[pos])) pos++;
   if (pos >= src.size()) return {TokenType::End, ""};
@@ -24,7 +25,7 @@ Token Lexer::next_token() {
     if (word == "true" || word == "false") {
       return {TokenType::Boolean, word};
     } else if (word == "let" || word == "if" || word == "else" ||
-               word == "for" || word == "print") {
+               word == "for" || word == "while" || word == "print") {
       return {TokenType::Keyword, word};
     }
     return {TokenType::Identifier, word};

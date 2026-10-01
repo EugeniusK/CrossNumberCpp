@@ -1,11 +1,12 @@
 <program>       ::= <stmt>*
-<stmt>          ::= <var_decl> | <assign_stmt> | <if_stmt> | <for_stmt> | <print_stmt> | <block_stmt>
+<stmt>          ::= <var_decl> | <assign_stmt> | <if_stmt> | <for_stmt> | <while_stmt> | <print_stmt> | <block_stmt>
 
 <block_stmt>     ::= "{" <stmt>* "}"
 <var_decl>       ::= "let" <ID> "=" <expr> ";"
 <assign_stmt>    ::= <ID> "=" <expr> ";"
 <if_stmt>        ::= "if" "(" <expr> ")" <stmt> ("else" <stmt>)?
 <for_stmt>       ::= "for" "(" (<var_decl> | <assign_stmt>) <expr> ";" <assign_stmt_no_semi> ")" <stmt>
+<while_stmt>     ::= "while" "(" <expr> ")" <stmt>
 <assign_stmt_no_semi> ::= <ID> "=" <expr>
 <print_stmt>     ::= "print" "(" <expr> ")" ";"
 
@@ -36,3 +37,87 @@
 <BOOLEAN>        ::= "true" | "false"
 <NUMBER>         ::= [0-9]+
 <ID>             ::= ([a-z] | [A-Z] | "_")+ ([a-z] | [A-Z] | [0-9] | "_" )*
+
+
+
+  // square
+  Hint a1 = Hint(1, true, std::string(R"(
+    for (let i = 0; i <= isqrt(OUTPUT_ARRAY_LENGTH); i= i + 1) {output[i * i] = 1;}
+  )"));
+  // multiple 1102
+  Hint a3 = Hint(3, true, std::string(R"(
+    for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i= i + 1) {
+      if (i % 1102 == 0) {
+        output[i] = 1;
+      }
+    }
+  )"));
+
+  Hint a7 = Hint(7, true);
+  // square
+  Hint a8 = Hint(8, true, std::string(R"(
+    for (let i = 0; i <= isqrt(OUTPUT_ARRAY_LENGTH); i= i + 1) {output[i * i] = 1;}
+  )"));
+  // square
+  Hint a9 = Hint(9, true, std::string(R"(
+    for (let i = 0; i <= isqrt(OUTPUT_ARRAY_LENGTH); i= i + 1) {output[i * i] = 1;}
+  )"));
+  // square
+  Hint a10 = Hint(10, true, std::string(R"(
+    for (let i = 0; i <= isqrt(OUTPUT_ARRAY_LENGTH); i= i + 1) {output[i * i] = 1;}
+  )"));
+  Hint a11 = Hint(11, true);
+  // cube
+  Hint a13 = Hint(13, true, std::string(R"(
+    for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i= i + 1) {
+      if (i * i * i < OUTPUT_ARRAY_LENGTH) {
+        output[i * i * i] = 1;
+      }
+    }
+  )"));
+  // prime
+  Hint a15 = Hint(15, true, std::string(R"(
+    for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i= i + 1) {
+      if (is_prime(i)) {
+        output[i] = 1;
+      }
+    }
+  )"));
+  // prime
+  Hint a18 = Hint(18, true, std::string(R"(
+    for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i= i + 1) {
+      if (is_prime(i)) {
+        output[i] = 1;
+      }
+    }
+  )"));
+  Hint a19 = Hint(19, true);
+  Hint a20 = Hint(20, true);
+  Hint a21 = Hint(21, true);
+  // cube
+  Hint a22 = Hint(22, true, std::string(R"(
+    for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i= i + 1) {
+      if (i * i * i < OUTPUT_ARRAY_LENGTH) {
+        output[i * i * i] = 1;
+      }
+    }
+  )"));
+  Hint a23 = Hint(23, true);
+  Hint a25 = Hint(25, true);
+  // square
+  Hint a26 = Hint(26, true, std::string(R"(
+    for (let i = 0; i <= isqrt(OUTPUT_ARRAY_LENGTH); i= i + 1) {output[i * i] = 1;}
+  )"));
+  // square
+  Hint a27 = Hint(27, true, std::string(R"(
+    for (let i = 0; i <= isqrt(OUTPUT_ARRAY_LENGTH); i= i + 1) {output[i * i] = 1;}
+  )"));
+  Hint a28 = Hint(28, true);
+  // Hint a28 = Hint(28, true, std::string(R"(
+  //   let i = 0;
+  //   while (i * i * i < OUTPUT_ARRAY_LENGTH) {
+  //     output[i * i * i] = 1;
+  //     i = i + 1;
+  //   }
+  // )"));
+  Hint a29 = Hint(29, true);

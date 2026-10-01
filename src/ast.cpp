@@ -6,7 +6,6 @@ std::unordered_map<std::string, int>::iterator Environment::find_var(
 };
 int Environment::get_var(std::string id) { return named_variable[id]; };
 void Environment::set_var(std::string id, int val) {
-  std::cout << id << val << std::endl;
   if (id == "ARRAY_LENGTH") {
     throw std::runtime_error("Cannot modify reserved variable ARRAY_LENGTH");
   };
@@ -19,6 +18,10 @@ void Environment::initialise_tmp_array(int len, int val = 0) {
   tmp_array.resize(len);
   std::fill(tmp_array.begin(), tmp_array.end(), val);
   named_variable["TMP_ARRAY_LENGTH"] = len;
+}
+
+void Environment::reset_output_array() {
+  std::fill(output_array.begin(), output_array.end(), 0);
 }
 
 int Environment::get_tmp_array(int idx) {
@@ -38,10 +41,14 @@ void Environment::set_tmp_array(int idx, int val) {
 }
 
 void Environment::initialise_output_array(int len, int val = 0) {
-  output_array.reserve(len);
-  output_array.resize(len);
-  std::fill(output_array.begin(), output_array.end(), val);
+  // output_array.reserve(len);
+  output_array.resize(len, val);
+  // std::fill(output_array.begin(), output_array.end(), val);
   named_variable["OUTPUT_ARRAY_LENGTH"] = len;
+}
+
+void Environment::reset_tmp_array() {
+  std::fill(tmp_array.begin(), tmp_array.end(), 0);
 }
 
 int Environment::get_output_array(int idx) {
@@ -63,7 +70,18 @@ void Environment::set_output_array(int idx, int val) {
 LiteralNode::LiteralNode(int val) : value(val) {}
 int LiteralNode::evaluate(Environment& env) { return value; }
 
-VariableNode::VariableNode(std::string n) : name(std::move(n)) {};
+VariableNode::VariableNode(std::string n)
+    : name(std::move(n)) {
+        // if ((name[0] == 'a' || name[0] == 'd') && name.size() > 1) {
+        //   bool reserved = true;
+        //   for (int i = 1; i < name.size() - 1; i++) {
+        //     if (!std::isdigit(name[i])) {
+        //       reserved = false;
+        //       break;
+        //     }
+        //   }
+        // }
+      };
 int VariableNode::evaluate(Environment& env) {
   auto result = env.find_var(name);
   if (result == env.invalid_var) {
@@ -152,6 +170,22 @@ void BlockStmtNode::execute(Environment& env) {
 VarDeclNode::VarDeclNode(std::string n, std::unique_ptr<ExprNode> i)
     : name(std::move(n)), init(std::move(i)) {}
 void VarDeclNode::execute(Environment& env) {
+  if ((name[0] == 'a' || name[0] == 'd') && name.size() > 1) {
+    bool reserved = true;
+    for (int i = 1; i < name.size() - 1; i++) {
+      if (!std::isdigit(name[i])) {
+        reserved = false;
+        break;
+      }
+    }
+    if (reserved) {
+      throw std::runtime_error("Cannot declare to reserved variable: " + name);
+    };
+  }
+
+  if (name[0] == 'c' && name.size() == 2 && std::isdigit(name[1])) {
+    throw std::runtime_error("Cannot declare to reserved variable: " + name);
+  }
   env.set_var(name, init->evaluate(env));
 }
 
@@ -160,6 +194,23 @@ AssignStmtNode::AssignStmtNode(std::string n, std::unique_ptr<ExprNode> e)
 void AssignStmtNode::execute(Environment& env) {
   if (env.find_var(name) == env.invalid_var)
     throw std::runtime_error("Assignment to undeclared: " + name);
+
+  if ((name[0] == 'a' || name[0] == 'd') && name.size() > 1) {
+    bool reserved = true;
+    for (int i = 1; i < name.size() - 1; i++) {
+      if (!std::isdigit(name[i])) {
+        reserved = false;
+        break;
+      }
+    }
+    if (reserved) {
+      throw std::runtime_error("Cannot assign to reserved variable: " + name);
+    };
+  }
+  if (name[0] == 'c' && name.size() == 2 && std::isdigit(name[1])) {
+    throw std::runtime_error("Cannot assign to reserved variable: " + name);
+  }
+
   env.set_var(name, expr->evaluate(env));
 }
 
@@ -184,7 +235,7 @@ void IndexAssignStmtNode::execute(Environment& env) {
 PrintStmtNode::PrintStmtNode(std::unique_ptr<ExprNode> e)
     : expr(std::move(e)) {}
 void PrintStmtNode::execute(Environment& env) {
-  std::cout << expr->evaluate(env) << "\n";
+  std::cout << "printed: " << expr->evaluate(env) << "\n";
 };
 
 IfStmtNode::IfStmtNode(std::unique_ptr<ExprNode> c, std::unique_ptr<StmtNode> t,
@@ -213,5 +264,14 @@ void ForStmtNode::execute(Environment& env) {
   while (condition->evaluate(env) != 0) {
     body->execute(env);
     if (update) update->execute(env);
+  }
+};
+
+WhileStmtNode::WhileStmtNode(std::unique_ptr<ExprNode> cond,
+                             std::unique_ptr<StmtNode> b)
+    : condition(std::move(cond)), body(std::move(b)) {}
+void WhileStmtNode::execute(Environment& env) {
+  while (condition->evaluate(env) != 0) {
+    body->execute(env);
   }
 };

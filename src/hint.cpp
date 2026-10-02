@@ -1,19 +1,22 @@
 #include "hint.h"
 
-#include <algorithm>
-#include <iostream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
-#include "utils.h"
+#include "builtin.h"
 
 Hint::Hint(int id, int is_hor, std::string program)
     : Parser(Lexer(std::move(program))),
       number_possible_values(0),
       identifier(id),
-      is_horizontal(is_hor) {}
+      is_horizontal(is_hor),
+      length(0),
+      x_pos(0),
+      y_pos(0) {}
 
 bool Hint::get_if_has_dependencies() const { return has_dependencies; }
+
 std::vector<std::string> Hint::get_dependencies() const {
   return {list_dependencies.begin(), list_dependencies.end()};
 }
@@ -29,6 +32,7 @@ int Hint::get_identifier() const { return identifier; }
 bool Hint::get_is_horizontal() const { return is_horizontal; }
 
 int Hint::get_length() const { return length; }
+
 void Hint::set_length(int len) {
   if (len < 2) {
     throw std::invalid_argument(
@@ -41,10 +45,9 @@ void Hint::set_length(int len) {
 void Hint::run_program_on_load() {
   env.initialise_output_array(static_cast<int>(ipow(10, length)), 0);
   env.initialise_tmp_array(static_cast<int>(ipow(10, length)), 0);
-  auto program = parse_program();
-  if (get_if_has_dependencies()) {
-  } else {
-    program->execute(env);
+  cached_program = parse_program();
+  if (!get_if_has_dependencies()) {
+    cached_program->execute(env);
 
     for (int i = 0; i < ipow(10, length); i++) {
       if (env.get_output_array(i) == 1 && i >= ipow(10, length - 1) &&
@@ -52,7 +55,7 @@ void Hint::run_program_on_load() {
         possible_values.push_back(i);
       }
     }
-    this->number_possible_values = this->possible_values.size();
+    number_possible_values = possible_values.size();
   }
 
   if (number_possible_values == 0) {
@@ -66,33 +69,20 @@ void Hint::run_program_on_load() {
 }
 
 void Hint::run_program_on_dependency() {
-  reset();
-  auto program = parse_program();
   env.reset_output_array();
   env.reset_tmp_array();
-  program->execute(env);
+  if (!cached_program) {
+    reset();
+    cached_program = parse_program();
+  }
+  cached_program->execute(env);
+}
+
+const std::vector<int>& Hint::get_written_output_indices() const {
+  return env.get_written_output_indices();
 }
 
 int Hint::get_x_pos() const { return x_pos; }
 void Hint::set_x_pos(int pos) { x_pos = pos; }
 int Hint::get_y_pos() const { return y_pos; }
 void Hint::set_y_pos(int pos) { y_pos = pos; }
-
-void Hint::load(std::vector<int> (*func)(int)) {
-  possible_values.clear();
-  number_possible_values = 0;
-
-  std::vector<int> arr = func(ipow(10, length));
-
-  for (int i : arr) {
-    if (i >= ipow(10, length - 1) && i < ipow(10, length)) {
-      possible_values.push_back(i);
-    }
-  }
-
-  std::ranges::sort(possible_values);
-  auto [first, last] = std::ranges::unique(possible_values);
-  possible_values.erase(first, last);
-
-  number_possible_values = possible_values.size();
-}

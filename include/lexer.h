@@ -36,6 +36,4 @@ class Lexer {
   size_t pos = 0;
 };
 
-std::string print_token(Token t);
-
 #endif

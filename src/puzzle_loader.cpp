@@ -3,7 +3,6 @@
 #include <cctype>
 #include <fstream>
 #include <map>
-#include <set>
 #include <sstream>
 #include <stdexcept>
 
@@ -129,7 +128,7 @@ PuzzleData load_puzzle(const std::string& filepath) {
   // Numbers must be -1 (black cell), 0 (white continuation), or positive clue numbers.
   // Positive clue numbers must be strictly ascending with no repeats.
   int prev_clue_num = 0;
-  std::set<int> layout_clue_numbers;
+  std::map<int, std::pair<int, int>> clue_coords;
 
   for (size_t i = 0; i < puzzle.grid.size(); ++i) {
     int val = puzzle.grid[i];
@@ -153,18 +152,9 @@ PuzzleData load_puzzle(const std::string& filepath) {
       }
     }
     prev_clue_num = val;
-    layout_clue_numbers.insert(val);
-  }
-
-  // Map clue numbers to their (x, y) coordinates in layout
-  std::map<int, std::pair<int, int>> clue_coords;
-  for (int y = 0; y < puzzle.height; ++y) {
-    for (int x = 0; x < puzzle.width; ++x) {
-      int val = puzzle.grid[y * puzzle.width + x];
-      if (val > 0) {
-        clue_coords[val] = {x, y};
-      }
-    }
+    int x = static_cast<int>(i % puzzle.width);
+    int y = static_cast<int>(i / puzzle.width);
+    clue_coords[val] = {x, y};
   }
 
   // 2. Validate clue scripts:

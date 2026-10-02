@@ -10,7 +10,6 @@ void Parser::advance() { curr = lexer.next_token(); }
 void Parser::reset() {
   lexer.reset();
   advance();
-  list_variables.clear();
   has_dependencies = false;
   list_dependencies.clear();
 }
@@ -24,15 +23,6 @@ void Parser::expect(const std::string& text) {
 Parser::Parser(Lexer l) : lexer(std::move(l)) {
   advance();
   has_dependencies = false;
-}
-
-std::string Parser::print_list_variables() {
-  std::string output;
-  for (const auto& var : list_variables) {
-    output += var;
-    output += ' ';
-  }
-  return output;
 }
 
 std::unique_ptr<BlockStmtNode> Parser::parse_program() {
@@ -298,7 +288,6 @@ std::unique_ptr<ExprNode> Parser::parse_primary() {
       return std::make_unique<IndexReadNode>(id, std::move(index));
     }
 
-    list_variables.insert(id);
     bool is_across_or_down =
         (id[0] == 'a' || id[0] == 'd') && id.size() > 1 &&
         std::all_of(id.begin() + 1, id.end(),

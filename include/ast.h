@@ -9,7 +9,6 @@
 class Environment {
  public:
   std::unordered_map<std::string, int>::iterator find_var(std::string id);
-  bool has_var(std::string id);
   std::unordered_map<std::string, int>::iterator var_end();
   int get_var(std::string id);
   void set_var(std::string id, int val);
@@ -21,12 +20,16 @@ class Environment {
   void reset_tmp_array();
   int get_tmp_array(int idx);
   void set_tmp_array(int idx, int val);
-  std::unordered_map<std::string, int>::iterator invalid_var;
+  const std::vector<int>& get_written_output_indices() const {
+    return written_output_indices;
+  }
 
  private:
   std::unordered_map<std::string, int> named_variable;
   std::vector<int> output_array;
   std::vector<int> tmp_array;
+  std::vector<int> written_output_indices;
+  std::vector<int> written_tmp_indices;
 };
 
 class ExprNode {

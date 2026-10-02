@@ -1,19 +1,19 @@
-#ifndef HINTS_H
-#define HINTS_H
+#ifndef HINT_H
+#define HINT_H
 
 #include <string>
 #include <vector>
 
 #include "parser.h"
+
 class Hint : Parser {
  public:
   Hint(int identifier, int is_horizontal, std::string program = "");
-  void load(std::vector<int> (*func)(int));
   void set_env(std::string variable_name, int val);
   int get_output_array(int idx);
+  const std::vector<int>& get_written_output_indices() const;
   bool get_if_has_dependencies() const;
   std::vector<std::string> get_dependencies() const;
-  //   int priority;
 
   std::vector<int> possible_values;
   int number_possible_values;
@@ -35,9 +35,11 @@ class Hint : Parser {
  private:
   int identifier;
   bool is_horizontal;
-  int length;
-  int x_pos;
-  int y_pos;
+  int length = 0;
+  int x_pos = 0;
+  int y_pos = 0;
   Environment env;
+  std::unique_ptr<BlockStmtNode> cached_program;
 };
+
 #endif

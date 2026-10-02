@@ -1,0 +1,274 @@
+# Crossnumber Puzzle Specification & DSL Reference (llms.txt)
+
+This document provides a complete technical guide for understanding, authoring, and analyzing `.puzzle` files and their domain-specific language (DSL) within the Crossnumber solver framework.
+
+---
+
+## 1. File Structure of `.puzzle` Files
+
+A `.puzzle` file is a plain text file defining the dimensions of the grid, the board layout (cells and clue positions), and the DSL programs for each clue.
+
+### 1.1 Structural Layout Overview
+
+A valid `.puzzle` file consists of three sequential parts:
+1. **Grid Dimension**: `GRID <width> <height>`
+2. **Layout Section**: `LAYOUT` followed by cell values.
+3. **Clue Blocks**: One or more `[CLUE <id>]` blocks containing DSL code.
+
+```text
+# Comments start with '#' and are ignored outside of clue blocks
+GRID <width> <height>
+
+LAYOUT
+ <val>, <val>, ..., <val>,
+ ...
+ <val>, <val>, ..., <val>
+
+[CLUE a1]
+// DSL script for across clue 1
+...
+
+[CLUE d1]
+// DSL script for down clue 1
+...
+```
+
+---
+
+### 1.2 Grid Definition (`GRID`)
+
+- **Syntax**: `GRID <width> <height>`
+- Defines the number of columns (`width`) and rows (`height`) in the puzzle.
+- Both values must be positive integers (e.g., `GRID 10 10`).
+
+---
+
+### 1.3 Layout Section (`LAYOUT`)
+
+The `LAYOUT` keyword is followed by numbers representing the board cells in row-major order (from top-left to bottom-right). Total values parsed must exactly equal `width * height`. Numbers can be separated by commas, spaces, tabs, or newlines.
+
+#### Cell Values:
+- `-1`: **Black / Blocked cell** (cannot contain digits).
+- `0`: **White continuation cell** (contains a digit continuing an across and/or down entry).
+- `> 0`: **Positive clue number** (e.g., `1`, `2`, `3`, ...). Marks the starting cell of an Across entry, a Down entry, or both.
+
+#### Layout Validation Rules:
+1. **Strictly Ascending Clue Numbers**: Clue numbers (`> 0`) must appear in strictly ascending order throughout the grid (`1, 2, 3, ...`), with no duplicates.
+2. **Clue Starting Conditions**:
+   - An **Across (horizontal) clue** starts at cell `(x, y)` if and only if:
+     - The cell to its left is either the left grid boundary (`x == 0`) or a black cell (`-1`), **AND**
+     - The continuous horizontal run of white cells rightward has length $\ge 2$.
+   - A **Down (vertical) clue** starts at cell `(x, y)` if and only if:
+     - The cell above it is either the top grid boundary (`y == 0`) or a black cell (`-1`), **AND**
+     - The continuous vertical run of white cells downward has length $\ge 2$.
+3. **No Isolated / Single-Digit Cells**: Every clue entry (Across or Down) must be of length $\ge 2$. Single-digit numbers are strictly forbidden. Any playable white cell must belong to at least one entry (across or down) of length $\ge 2$.
+4. **Exact Clue Pairing (No Missing & No Unused Hints)**:
+   - For every valid Across start at clue number `N`, a corresponding `[CLUE aN]` block must be defined.
+   - For every valid Down start at clue number `N`, a corresponding `[CLUE dN]` block must be defined.
+   - Any extra, missing, or mismatched clue scripts trigger a validation error.
+
+---
+
+### 1.4 Clue Blocks (`[CLUE <id>]`)
+
+- **Header Syntax**: `[CLUE <id>]` (case-insensitive: `[CLUE a1]`, `[CLUE d12]`, etc.).
+  - `<id>` must begin with `a` (Across) or `d` (Down) followed by the clue number matching the layout.
+- Everything following the header up to the next `[CLUE ...]` header (or end of file) is treated verbatim as the DSL script for that clue.
+- The DSL uses `//` for comments.
+
+---
+
+## 2. DSL Architecture & Runtime Environment
+
+Each clue script is executed inside an execution `Environment`. The purpose of a clue script is to populate candidate numbers into the `output` array.
+
+### 2.1 The `output` Array & Candidate Marking
+
+- **Semantic Role**: `output[i]` indicates whether integer `i` is a valid candidate for this clue.
+- Setting `output[i] = 1;` (or `true`) marks integer `i` as a possible value.
+- The solver searches candidate values where `output[i] != 0` and $10^{\text{length}-1} \le i < 10^{\text{length}}$ (i.e. leading digits cannot be 0).
+- The `output` array is zero-initialized before script execution.
+
+### 2.2 Reserved Variables: `OUTPUT_ARRAY_LENGTH` & `TMP_ARRAY_LENGTH`
+
+- For a clue of digit length $L$, the `output` and `tmp` arrays have size $10^L$:
+  $$\text{OUTPUT\_ARRAY\_LENGTH} = 10^L$$
+  $$\text{TMP\_ARRAY\_LENGTH} = 10^L$$
+  - Example: For a 3-digit clue ($L = 3$), `OUTPUT_ARRAY_LENGTH` is `1000`. The valid 3-digit candidates fall in the range $[100, 999]$.
+- `OUTPUT_ARRAY_LENGTH` and `TMP_ARRAY_LENGTH` are read-only built-in variables. Attempting to assign or declare them causes a runtime error.
+- Accessing or assigning indices $< 0$ or $\ge \text{OUTPUT\_ARRAY\_LENGTH}$ throws an out-of-bounds error.
+
+### 2.3 The `tmp` Scratchpad Array
+
+- `tmp` is a secondary array of size `TMP_ARRAY_LENGTH` available as a workspace for intermediate computations (e.g., permutation generation, digit extraction, counting, sorting).
+- Read and write syntax: `tmp[idx] = val;`, `let x = tmp[idx];`.
+
+---
+
+## 3. Clue Dependency System & Reserved Variables
+
+The DSL provides reserved variables to reference other clues and grid-wide statistics.
+
+### 3.1 Reserved Variable Names
+
+1. **Across Clues (`a1, a2, ..., aN`)**:
+   - Represents the integer value of Across clue `N` on the puzzle grid.
+   - Example: `a10 * 11` evaluates to $11 \times$ the value of 10 Across.
+2. **Down Clues (`d1, d2, ..., dN`)**:
+   - Represents the integer value of Down clue `N` on the puzzle grid.
+   - Example: `dsum(d17)` computes the digit sum of 17 Down.
+3. **Digit Frequency / Counts (`c0, c1, ..., c9`)**:
+   - `c0` through `c9` represent the total frequency (count of occurrences) of the respective digit (`0` through `9`) across the entire puzzle grid.
+   - Example: `if (get_nth_digit(i, 2) == 19 - c9)` filters candidates based on the count of 9s in the puzzle.
+
+> **Restriction**: User variables cannot be named `a<digits>`, `d<digits>`, or `c<digit>`. Declaring `let a1 = ...;` or assigning `a1 = ...;` throws a compilation/runtime error.
+
+### 3.2 Static vs. Dynamic Clue Execution
+
+- **Independent Clues (No Dependencies)**:
+  - If a clue does not reference any `a*`, `d*`, or `c*` variables, it is executed once during puzzle loading (`run_program_on_load`).
+  - Its `possible_values` candidate list is permanently populated from all `i` where `output[i] == 1`.
+- **Dependent Clues (With Dependencies)**:
+  - When the parser encounters an `a*`, `d*`, or `c*` identifier, it flags the clue as dependent (`has_dependencies = true`) and tracks the dependencies.
+  - On load, all integers with valid length ($10^{L-1} \dots 10^L - 1$) are initially retained.
+  - During puzzle solving, when all dependent clue entries are filled in the grid, the solver populates the environment with their actual values and executes `run_program_on_dependency()`.
+  - The proposed value on the grid is checked: if `output[grid_value] == 0`, the solver prunes the branch and backtracks.
+
+---
+
+## 4. DSL Grammar & Language Reference
+
+The DSL is an imperative scripting language with C-style syntax.
+
+### 4.1 Statements
+
+- **Variable Declaration**:
+  ```dsl
+  let x = 10;
+  ```
+- **Variable Assignment**:
+  ```dsl
+  x = x + 1;
+  ```
+- **Array Assignment**:
+  ```dsl
+  output[expr] = 1;
+  tmp[expr] = val;
+  ```
+- **Conditional (`if` / `else`)**:
+  ```dsl
+  if (cond) {
+    ...
+  } else {
+    ...
+  }
+  ```
+- **While Loop**:
+  ```dsl
+  while (cond) {
+    ...
+  }
+  ```
+- **For Loop**:
+  ```dsl
+  for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i = i + 1) {
+    ...
+  }
+  ```
+  *(Note: Update statement does not have a trailing semicolon, e.g. `i = i + 1`)*
+- **Block Statement**: `{ stmt1; stmt2; }`
+- **Print Statement**: `print(expr);` (prints to stdout for debugging)
+
+### 4.2 Expressions and Operators
+
+Listed from highest to lowest precedence:
+1. **Primary**: Numbers (`123`), Booleans (`true` / `false`), Identifiers, Parenthesized `(expr)`, Array indexing (`output[i]`, `tmp[i]`), Function calls (`fn(args)`).
+2. **Unary**: `+`, `-`, `!` (logical NOT).
+3. **Multiplicative**: `*`, `/`, `%` (integer division and modulo).
+4. **Additive**: `+`, `-`.
+5. **Relational**: `<`, `<=`, `>`, `>=`.
+6. **Equality**: `==`, `!=`.
+7. **Logical AND**: `&&`.
+8. **Logical OR**: `||`.
+
+---
+
+## 5. Built-in Function Registry
+
+The following mathematical and digit-manipulation functions are natively available in the DSL:
+
+| Function | Signature | Description |
+| :--- | :--- | :--- |
+| `is_prime(n)` | `(int) -> int` | Returns `1` if `n` is prime, `0` otherwise. (`n < 2` returns `0`). |
+| `is_palindrome(n)` | `(int) -> int` | Returns `1` if the decimal representation of `n` is palindromic, `0` otherwise. |
+| `pow(base, exp)` | `(int, int) -> int` | Computes integer power $\text{base}^{\text{exp}}$. |
+| `isqrt(n)` | `(int) -> int` | Computes the integer square root $\lfloor \sqrt{n} \rfloor$. Throws on $n < 0$. |
+| `dsum(n)` | `(int) -> int` | Returns the sum of decimal digits of $|n|$. Example: `dsum(149) == 14`. |
+| `get_nth_digit(n, k)` | `(int, int) -> int` | Returns the 1-based $k$-th digit of $|n|$ from left to right. Example: `get_nth_digit(982, 1) == 9`, `get_nth_digit(982, 3) == 2`. Returns `0` if out of bounds. |
+| `reverse(n)` | `(int) -> int` | Reverses the decimal digits of $|n|$. Example: `reverse(120) == 21`, `reverse(407) == 704`. |
+
+---
+
+## 6. Common DSL Implementation Patterns
+
+### Pattern 1: Squares and Cubes
+```dsl
+// All squares fitting the clue length
+let i = 0;
+while (i * i < OUTPUT_ARRAY_LENGTH) {
+  output[i * i] = 1;
+  i = i + 1;
+}
+
+// All cubes fitting the clue length
+let j = 0;
+while (pow(j, 3) < OUTPUT_ARRAY_LENGTH) {
+  output[pow(j, 3)] = 1;
+  j = j + 1;
+}
+```
+
+### Pattern 2: Multiples and Divisibility
+```dsl
+// Multiples of 63
+for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i = i + 1) {
+  if (i % 63 == 0) {
+    output[i] = 1;
+  }
+}
+```
+
+### Pattern 3: Digit Sum and Palindromes
+```dsl
+for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i = i + 1) {
+  if (is_palindrome(i) && dsum(i) == 18) {
+    output[i] = 1;
+  }
+}
+```
+
+### Pattern 4: Clue Dependency Formulas
+```dsl
+// Direct formula evaluation (e.g., 3 Across is 10 Across * 11)
+let val = a10 * 11;
+if (val < OUTPUT_ARRAY_LENGTH) {
+  output[val] = 1;
+}
+
+// Relational matching (e.g., 1 Across has same digit sum as 1 Down)
+for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i = i + 1) {
+  if (dsum(i) == dsum(d1)) {
+    output[i] = 1;
+  }
+}
+```
+
+### Pattern 5: Digit Frequency Dependencies (`c0`–`c9`)
+```dsl
+// 19 Across second digit equals 19 minus the total number of 9s in the grid
+for (let i = OUTPUT_ARRAY_LENGTH / 10; i < OUTPUT_ARRAY_LENGTH; i = i + 1) {
+  if (get_nth_digit(i, 2) == 19 - c9) {
+    output[i] = 1;
+  }
+}
+```

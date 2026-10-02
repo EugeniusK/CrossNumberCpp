@@ -1,10 +1,10 @@
 #include "builtin.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <stdexcept>
 
-namespace {
-
+// Core math & digit utilities
 bool is_prime(int n) {
   if (n < 2) return false;
   for (long long i = 2; i * i <= n; ++i) {
@@ -38,10 +38,33 @@ int reverse_num(int n) {
   int rev_num = 0;
   while (num > 0) {
     rev_num = rev_num * 10 + num % 10;
-    num = num / 10;
+    num /= 10;
   }
   return rev_num;
 }
+
+int dsum(int n) {
+  int sum = 0;
+  int num = std::abs(n);
+  while (num != 0) {
+    sum += num % 10;
+    num /= 10;
+  }
+  return sum;
+}
+
+int get_nth_digit(int n, int digit, int total_digit) {
+  return (n / ipow(10, total_digit - digit - 1)) % 10;
+}
+
+int isqrt(int n) {
+  if (n < 0) {
+    throw std::runtime_error("isqrt() requires non-negative argument");
+  }
+  return static_cast<int>(std::sqrt(n));
+}
+
+namespace {
 
 int fn_prime(const std::vector<int>& args) {
   if (args.size() != 1) {
@@ -68,26 +91,14 @@ int fn_isqrt(const std::vector<int>& args) {
   if (args.size() != 1) {
     throw std::runtime_error("isqrt() requires exactly 1 argument");
   }
-  if (args[0] < 0) {
-    throw std::runtime_error("isqrt() requires non-negative argument");
-  }
-
-  return static_cast<int>(std::sqrt(args[0]));
+  return isqrt(args[0]);
 }
 
 int fn_dsum(const std::vector<int>& args) {
   if (args.size() != 1) {
     throw std::runtime_error("dsum() requires exactly 1 argument");
   }
-
-  int sum = 0;
-  int n = std::abs(args[0]);
-  while (n != 0) {
-    int last = n % 10;
-    sum += last;
-    n /= 10;
-  }
-  return sum;
+  return dsum(args[0]);
 }
 
 int fn_get_nth_digit(const std::vector<int>& args) {
@@ -100,10 +111,9 @@ int fn_get_nth_digit(const std::vector<int>& args) {
   if (n <= 0 || n > count) {
     return 0;
   }
-  return (num / ipow(10, count - n)) % 10;
+  return get_nth_digit(num, n - 1, count);
 }
 
-// Built-in: pow(base, exp)
 int fn_reverse(const std::vector<int>& args) {
   if (args.size() != 1) {
     throw std::runtime_error("reverse() requires exactly 1 argument");
@@ -116,7 +126,6 @@ int fn_reverse(const std::vector<int>& args) {
 const BuiltinTable& get_builtin_functions() {
   static const BuiltinTable registry = {{"is_prime", fn_prime},
                                         {"is_palindrome", fn_palindrome},
-                                        // {"gcd", fn_gcd},
                                         {"pow", fn_pow},
                                         {"isqrt", fn_isqrt},
                                         {"dsum", fn_dsum},

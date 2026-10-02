@@ -13,8 +13,6 @@ class Parser {
   Parser(Lexer l);
   std::unique_ptr<BlockStmtNode> parse_program();
   void reset();
-  std::set<std::string> list_variables;
-  std::string print_list_variables();
 
  private:
   Lexer lexer;

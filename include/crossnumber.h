@@ -4,9 +4,8 @@
 #include <string>
 #include <vector>
 
-// #include "digit.h"
+#include "builtin.h"
 #include "hint.h"
-#include "utils.h"
 
 class CrossNumber {
  public:
@@ -59,16 +58,22 @@ class CrossNumber {
 
   // based on guesses and the possible values stored inside of them, attempt
   // them
-  virtual bool try_values(int arr[], int count) = 0;
-  virtual void apply_values(int arr[], int count) = 0;
-  virtual void clear_values(int arr[], int count) = 0;
+  virtual bool try_values(const std::vector<int>& arr, int count) = 0;
+  virtual void apply_values(const std::vector<int>& arr, int count) = 0;
+  virtual void clear_values(const std::vector<int>& arr, int count) = 0;
 
   // based on the possible values stored inside the hints,
   // remove the values that aren't possible
   // returns true if no reduction made
   virtual bool digit_shake() = 0;
+  virtual bool digit_shake_with_dependencies() = 0;
+
   // get how many times digit n has been used
   virtual int count_digits(int n) = 0;
+
+  // get hint by identifier (e.g. "a1", "d9")
+  // virtual Hint& get_hint(const std::string& identifier) = 0;
+  virtual Hint& get_hint(const std::string& identifier) const = 0;
 
   // hints that can be modified
   std::vector<std::reference_wrapper<Hint>> hints;
@@ -94,19 +99,23 @@ class ArrayCrossNumber : public CrossNumber {
   void clear_value(Hint& hint) override;
   bool is_possible_value(int val, Hint& hint) override;
   void load_hint(Hint& hint) override;
-  bool try_values(int arr[], int count) override;
-  void apply_values(int arr[], int count) override;
-  void clear_values(int arr[], int count) override;
+  bool try_values(const std::vector<int>& arr, int count) override;
+  void apply_values(const std::vector<int>& arr, int count) override;
+  void clear_values(const std::vector<int>& arr, int count) override;
 
   bool digit_shake() override;
+  bool digit_shake_with_dependencies() override;
+
   int count_digits(int n) override;
+
+  // Hint& get_hint(const std::string& identifier) override;
+  Hint& get_hint(const std::string& identifier) const override;
 
  private:
   int width;
   int height;
-  int layout[MAX_SQUARE_COUNT];  // only describes layout, location of clues
-  // Digit digits[MAX_SQUARE_COUNT];  // possible digits for each square
-  int value[MAX_SQUARE_COUNT];  // value that board takes at the moment
+  std::vector<int> layout;  // only describes layout, location of clues
+  std::vector<int> value;   // value that board takes at the moment
 };
 
 #endif

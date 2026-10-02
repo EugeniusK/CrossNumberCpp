@@ -76,37 +76,3 @@ Token Lexer::next_token() {
 
   throw std::runtime_error(std::string("Unexpected character: ") + c);
 }
-
-std::string print_token(Token t) {
-  switch (t.type) {
-    case TokenType::Number:
-      return "Number[" + t.text + "]";
-    case TokenType::Boolean:
-      return "Boolean[" + t.text + "]";
-    case TokenType::Identifier:
-      return "Identifier[" + t.text + "]";
-    case TokenType::Operator:
-      return "Operator[" + t.text + "]";
-    case TokenType::Keyword:
-      return "Keyword[" + t.text + "]";
-    case TokenType::SemiColon:
-      return "SemiColon";
-    case TokenType::OpenParen:
-      return "OpenParen";
-    case TokenType::CloseParen:
-      return "CloseParen";
-    case TokenType::OpenBrace:
-      return "OpenBrace";
-    case TokenType::CloseBrace:
-      return "CloseBrace";
-    case TokenType::OpenBracket:
-      return "OpenBracket";
-    case TokenType::CloseBracket:
-      return "CloseBracket";
-    case TokenType::Comma:
-      return "Comma";
-    case TokenType::End:
-      return "End";
-  }
-  return "error";
-}

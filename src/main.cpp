@@ -27,7 +27,8 @@ int main(int argc, char* argv[]) {
 
     b.define_squares(ryder);
 
-    // Collect and sort clue IDs (across first, then down; ascending numerical order)
+    // Collect and sort clue IDs (across first, then down; ascending numerical
+    // order)
     std::vector<std::string> clue_ids;
     clue_ids.reserve(puzzle.clue_scripts.size());
     for (const auto& [id, _] : puzzle.clue_scripts) {
@@ -64,8 +65,15 @@ int main(int argc, char* argv[]) {
         break;
       }
     }
-
+    b.digit_shake_with_dependencies();
+    while (true) {
+      if (b.digit_shake()) {
+        break;
+      }
+    }
     solver_one.solve(b);
+    return 0;
+
   } catch (const std::exception& e) {
     std::cerr << "Error: " << e.what() << std::endl;
     return 1;

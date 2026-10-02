@@ -1,16 +1,15 @@
 #include "solver_one.h"
 
 #include <algorithm>
-#include <array>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "backtrackstack.h"
-#include "utils.h"
+#include "builtin.h"
 void SolverOne::solve(ArrayCrossNumber crossnumber) {
-  int guesses[MAX_HINT_COUNT] = {0};
+  std::vector<int> guesses(crossnumber.hints.size(), 0);
   int number_guesses = 0;
   bool forward = true;
   bool increment = false;
@@ -19,9 +18,7 @@ void SolverOne::solve(ArrayCrossNumber crossnumber) {
   bool stack_full;
   bool stack_can_increment_top;
 
-  std::vector<std::array<int, MAX_HINT_COUNT>> solutions;
-
-  BacktrackStack stack = BacktrackStack();
+  BacktrackStack stack;
 
   std::sort(crossnumber.hints.begin(), crossnumber.hints.end(),
             [](const Hint& a, const Hint& b) {

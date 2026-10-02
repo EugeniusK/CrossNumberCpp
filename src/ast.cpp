@@ -13,9 +13,6 @@ std::unordered_map<std::string, int>::iterator Environment::find_var(
     std::string id) {
   return named_variable.find(id);
 };
-bool Environment::has_var(std::string id) {
-  return named_variable.find(id) != named_variable.end();
-}
 std::unordered_map<std::string, int>::iterator Environment::var_end() {
   return named_variable.end();
 }
@@ -25,23 +22,23 @@ void Environment::set_var(std::string id, int val) {
     throw std::runtime_error("Cannot modify reserved variable " + id);
   };
   named_variable[id] = val;
-  invalid_var = named_variable.end();
 };
 
 void Environment::initialise_tmp_array(int len, int val) {
-  tmp_array.reserve(len);
-  tmp_array.resize(len);
-  std::fill(tmp_array.begin(), tmp_array.end(), val);
+  tmp_array.assign(len, val);
+  written_tmp_indices.clear();
   named_variable["TMP_ARRAY_LENGTH"] = len;
-  invalid_var = named_variable.end();
 }
 
 void Environment::reset_output_array() {
-  std::fill(output_array.begin(), output_array.end(), 0);
+  for (int idx : written_output_indices) {
+    output_array[idx] = 0;
+  }
+  written_output_indices.clear();
 }
 
 int Environment::get_tmp_array(int idx) {
-  if (idx < 0 || idx >= tmp_array.size()) {
+  if (idx < 0 || idx >= static_cast<int>(tmp_array.size())) {
     throw std::runtime_error(
         "Attempt to access outsize allowed range for tmp_array");
   };
@@ -49,25 +46,31 @@ int Environment::get_tmp_array(int idx) {
 }
 
 void Environment::set_tmp_array(int idx, int val) {
-  if (idx < 0 || idx >= tmp_array.size()) {
+  if (idx < 0 || idx >= static_cast<int>(tmp_array.size())) {
     throw std::runtime_error(
         "Attempt to set outsize allowed range for tmp_array");
   };
+  if (tmp_array[idx] == 0 && val != 0) {
+    written_tmp_indices.push_back(idx);
+  }
   tmp_array[idx] = val;
 }
 
 void Environment::initialise_output_array(int len, int val) {
-  output_array.resize(len, val);
+  output_array.assign(len, val);
+  written_output_indices.clear();
   named_variable["OUTPUT_ARRAY_LENGTH"] = len;
-  invalid_var = named_variable.end();
 }
 
 void Environment::reset_tmp_array() {
-  std::fill(tmp_array.begin(), tmp_array.end(), 0);
+  for (int idx : written_tmp_indices) {
+    tmp_array[idx] = 0;
+  }
+  written_tmp_indices.clear();
 }
 
 int Environment::get_output_array(int idx) {
-  if (idx < 0 || idx >= output_array.size()) {
+  if (idx < 0 || idx >= static_cast<int>(output_array.size())) {
     throw std::runtime_error(
         "Attempt to access outsize allowed range for output_array");
   };
@@ -75,10 +78,13 @@ int Environment::get_output_array(int idx) {
 }
 
 void Environment::set_output_array(int idx, int val) {
-  if (idx < 0 || idx >= output_array.size()) {
+  if (idx < 0 || idx >= static_cast<int>(output_array.size())) {
     throw std::runtime_error(
         "Attempt to set outsize allowed range for output_array");
   };
+  if (output_array[idx] == 0 && val != 0) {
+    written_output_indices.push_back(idx);
+  }
   output_array[idx] = val;
 }
 

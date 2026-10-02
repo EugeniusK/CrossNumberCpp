@@ -1,15 +1,13 @@
 #include "builtin.h"
 
-#include <algorithm>
 #include <cmath>
-#include <numeric>
+#include <stdexcept>
 
 namespace {
 
-// Helper: Checks primality
 bool is_prime(int n) {
   if (n < 2) return false;
-  for (int i = 2; i * i <= n; ++i) {
+  for (long long i = 2; i * i <= n; ++i) {
     if (n % i == 0) return false;
   }
   return true;
@@ -24,7 +22,7 @@ int ipow(int base, int exp) {
 }
 
 int digit_count(int n) {
-  int num = n;
+  int num = std::abs(n);
   if (num == 0) return 1;
 
   int count = 0;
@@ -36,38 +34,29 @@ int digit_count(int n) {
 }
 
 int reverse_num(int n) {
+  int num = std::abs(n);
   int rev_num = 0;
-  while (n > 0) {
-    rev_num = rev_num * 10 + n % 10;
-    n = n / 10;
+  while (num > 0) {
+    rev_num = rev_num * 10 + num % 10;
+    num = num / 10;
   }
   return rev_num;
 }
 
-// Built-in: prime(x)
 int fn_prime(const std::vector<int>& args) {
   if (args.size() != 1) {
-    throw std::runtime_error("prime() requires exactly 1 argument");
+    throw std::runtime_error("is_prime() requires exactly 1 argument");
   }
   return is_prime(args[0]) ? 1 : 0;
 }
 
 int fn_palindrome(const std::vector<int>& args) {
   if (args.size() != 1) {
-    throw std::runtime_error("palindrome() requires exactly 1 argument");
+    throw std::runtime_error("is_palindrome() requires exactly 1 argument");
   }
   return (args[0] == reverse_num(args[0])) ? 1 : 0;
 }
 
-// // Built-in: gcd(a, b)
-// int fn_gcd(const std::vector<int>& args) {
-//   if (args.size() != 2) {
-//     throw std::runtime_error("gcd() requires exactly 2 arguments");
-//   }
-//   return std::gcd(args[0], args[1]);
-// }
-
-// Built-in: pow(base, exp)
 int fn_pow(const std::vector<int>& args) {
   if (args.size() != 2) {
     throw std::runtime_error("pow() requires exactly 2 arguments");
@@ -79,8 +68,11 @@ int fn_isqrt(const std::vector<int>& args) {
   if (args.size() != 1) {
     throw std::runtime_error("isqrt() requires exactly 1 argument");
   }
+  if (args[0] < 0) {
+    throw std::runtime_error("isqrt() requires non-negative argument");
+  }
 
-  return std::sqrt(args[0]);
+  return static_cast<int>(std::sqrt(args[0]));
 }
 
 int fn_dsum(const std::vector<int>& args) {
@@ -89,7 +81,7 @@ int fn_dsum(const std::vector<int>& args) {
   }
 
   int sum = 0;
-  int n = args[0];
+  int n = std::abs(args[0]);
   while (n != 0) {
     int last = n % 10;
     sum += last;
@@ -100,9 +92,15 @@ int fn_dsum(const std::vector<int>& args) {
 
 int fn_get_nth_digit(const std::vector<int>& args) {
   if (args.size() != 2) {
-    throw std::runtime_error("get_nth_digit() requires exactly 2 argument");
+    throw std::runtime_error("get_nth_digit() requires exactly 2 arguments");
   }
-  return (args[0] / ipow(10, digit_count(args[0]) - args[1])) % 10;
+  int num = std::abs(args[0]);
+  int n = args[1];
+  int count = digit_count(num);
+  if (n <= 0 || n > count) {
+    return 0;
+  }
+  return (num / ipow(10, count - n)) % 10;
 }
 
 // Built-in: pow(base, exp)

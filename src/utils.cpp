@@ -1,7 +1,7 @@
 #include "utils.h"
 
+#include <cmath>
 #include <iostream>
-#include <vector>
 
 int get_nth_digit(int n, int digit, int total_digit) {
   return (n / ipow(10, total_digit - digit - 1)) % 10;
@@ -23,19 +23,21 @@ bool f(int a, int b, int c, int d) {
 
 int dsum(int n) {
   int sum = 0;
-  while (n != 0) {
-    int last = n % 10;
+  int num = std::abs(n);
+  while (num != 0) {
+    int last = num % 10;
     sum += last;
-    n /= 10;
+    num /= 10;
   }
   return sum;
 }
 
 int reverse_num(int n) {
   int rev_num = 0;
-  while (n > 0) {
-    rev_num = rev_num * 10 + n % 10;
-    n = n / 10;
+  int num = std::abs(n);
+  while (num > 0) {
+    rev_num = rev_num * 10 + num % 10;
+    num = num / 10;
   }
   return rev_num;
 }

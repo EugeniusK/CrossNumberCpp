@@ -1,34 +1,28 @@
 #include <algorithm>
 #include <array>
+#include <iostream>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "crossnumber.h"
 
 ArrayCrossNumber::ArrayCrossNumber(int width, int height)
-    : CrossNumber(width, height) {
-  this->width = width;
-  this->height = height;
+    : CrossNumber(width, height), width(width), height(height) {
   std::fill(std::begin(layout), std::end(layout), -2);
   std::fill(std::begin(value), std::end(value), -1);
   if (width * height > MAX_SQUARE_COUNT) {
-    std::string error_message_size =
-        "Size of board cannot exceed " + std::to_string(MAX_SQUARE_COUNT);
-    throw std::invalid_argument(error_message_size);
+    throw std::invalid_argument("Size of board cannot exceed " +
+                                std::to_string(MAX_SQUARE_COUNT));
   }
-};
+}
 
 void ArrayCrossNumber::define_squares(std::vector<int> squares) {
-  // layout - 1~N for hint on board
-  // layout - 0 for valid square without hint
-  // layout - -1 for invalid square
-
-  // value - -2 for squares where numbers can go
-  // value - -1 for invalid square
-  for (int i = 0; i < squares.size(); i++) {
+  for (size_t i = 0; i < squares.size(); ++i) {
     layout[i] = squares[i];
-    value[i] = -2;
     if (squares[i] != -1) {
-      digits[i] = Digit();
+      value[i] = -2;
+      // digits[i] = Digit();
     } else {
       value[i] = -1;
     }
@@ -101,11 +95,31 @@ std::string ArrayCrossNumber::display_value() {
 }
 
 std::string ArrayCrossNumber::display_digit_count() {
-  std::string output = "";
-  for (int i = 0; i < 10; i++) {
-    output += std::to_string(
-        std::count(std::begin(this->value), std::end(this->value), i));
-    output += " | ";
+  auto format_width_3 = [](int val) -> std::string {
+    std::string s = std::to_string(val);
+    if (s.length() < 3) {
+      s = std::string(3 - s.length(), ' ') + s;
+    }
+    return s;
+  };
+
+  std::string output = "Digit |";
+  for (int i = 0; i < 10; ++i) {
+    output += format_width_3(i);
+    output += " |";
+  }
+  output += "\n";
+
+  output += "-------";
+  for (int i = 0; i < 10; ++i) {
+    output += "-----";
+  }
+  output += "\n";
+
+  output += "Count |";
+  for (int i = 0; i < 10; ++i) {
+    output += format_width_3(count_digits(i));
+    output += " |";
   }
 
   return output;
@@ -113,61 +127,53 @@ std::string ArrayCrossNumber::display_digit_count() {
 
 void ArrayCrossNumber::set_value(int val, int x_pos, int y_pos, int length,
                                  bool is_horizontal) {
-  if (is_horizontal) {
-    for (int i = 0; i < length; i++) {
-      value[y_pos * width + (x_pos + i)] =
-          (val / ipow(10, length - i - 1)) % 10;
-    }
-  } else {
-    for (int i = 0; i < length; i++) {
-      value[(y_pos + i) * width + x_pos] =
-          (val / ipow(10, length - i - 1)) % 10;
-    }
+  auto cell_idx = [&](int i) {
+    return is_horizontal ? y_pos * width + (x_pos + i)
+                         : (y_pos + i) * width + x_pos;
+  };
+  for (int i = 0; i < length; ++i) {
+    value[cell_idx(i)] = (val / ipow(10, length - i - 1)) % 10;
   }
 }
+
 int ArrayCrossNumber::get_value(int x_pos, int y_pos, int length,
                                 bool is_horizontal) {
+  auto cell_idx = [&](int i) {
+    return is_horizontal ? y_pos * width + (x_pos + i)
+                         : (y_pos + i) * width + x_pos;
+  };
   int sum = 0;
-  if (is_horizontal) {
-    for (int i = 0; i < length; i++) {
-      sum += value[y_pos * width + (x_pos + i)] * ipow(10, length - i - 1);
-    }
-  } else {
-    for (int i = 0; i < length; i++) {
-      sum += value[(y_pos + i) * width + x_pos] * ipow(10, length - i - 1);
-    }
+  for (int i = 0; i < length; ++i) {
+    sum += value[cell_idx(i)] * ipow(10, length - i - 1);
   }
   return sum;
 }
+
 void ArrayCrossNumber::clear_value(int x_pos, int y_pos, int length,
                                    bool is_horizontal) {
-  if (is_horizontal) {
-    for (int i = 0; i < length; i++) {
-      value[y_pos * width + (x_pos + i)] = -2;
-    }
-  } else {
-    for (int i = 0; i < length; i++) {
-      value[(y_pos + i) * width + x_pos] = -2;
-    }
+  auto cell_idx = [&](int i) {
+    return is_horizontal ? y_pos * width + (x_pos + i)
+                         : (y_pos + i) * width + x_pos;
+  };
+  for (int i = 0; i < length; ++i) {
+    value[cell_idx(i)] = -2;
   }
 }
+
 bool ArrayCrossNumber::is_possible_value(int val, int x_pos, int y_pos,
                                          int length, bool is_horizontal) {
-  bool valid = true;
-  if (is_horizontal) {
-    for (int i = 0; i < length; i++) {
-      int idx = y_pos * width + (x_pos + i);
-      int digit = (val / ipow(10, length - i - 1)) % 10;
-      valid = valid && (value[idx] == digit || value[idx] == -2);
-    }
-  } else {
-    for (int i = 0; i < length; i++) {
-      int idx = (y_pos + i) * width + x_pos;
-      int digit = (val / ipow(10, length - i - 1)) % 10;
-      valid = valid && (value[idx] == digit || value[idx] == -2);
+  auto cell_idx = [&](int i) {
+    return is_horizontal ? y_pos * width + (x_pos + i)
+                         : (y_pos + i) * width + x_pos;
+  };
+  for (int i = 0; i < length; ++i) {
+    int idx = cell_idx(i);
+    int digit = (val / ipow(10, length - i - 1)) % 10;
+    if (value[idx] != digit && value[idx] != -2) {
+      return false;
     }
   }
-  return valid;
+  return true;
 }
 
 void ArrayCrossNumber::set_value(int val, Hint& hint) {
@@ -207,25 +213,32 @@ void ArrayCrossNumber::load_hint(Hint& hint) {
   // find the length of the hint
   int length = 0;
 
-  for (int i = 0; i < this->height; i++) {
-    if (hint.get_is_horizontal()) {
+  if (hint.get_is_horizontal()) {
+    for (int i = 0; hint.get_x_pos() + i < this->width; i++) {
       if (this->value[hint.get_x_pos() + i + hint.get_y_pos() * this->width] !=
-              -1 &&
-          hint.get_x_pos() + i < this->width) {
+          -1) {
         length += 1;
-      } else {
-        break;
-      }
-    } else {
-      if (this->value[hint.get_x_pos() +
-                      (hint.get_y_pos() + i) * this->width] != -1 &&
-          hint.get_y_pos() + i < this->height) {
-        length += 1;
-
       } else {
         break;
       }
     }
+  } else {
+    for (int i = 0; hint.get_y_pos() + i < this->height; i++) {
+      if (this->value[hint.get_x_pos() +
+                      (hint.get_y_pos() + i) * this->width] != -1) {
+        length += 1;
+      } else {
+        break;
+      }
+    }
+  }
+
+  if (length < 2) {
+    throw std::logic_error(
+        "Hint " + std::string(hint.get_is_horizontal() ? "a" : "d") +
+        std::to_string(hint.get_identifier()) + " refers to a number with " +
+        std::to_string(length) +
+        " digit(s): all hints must refer to numbers with two or more digits");
   }
 
   hint.set_length(length);
@@ -302,35 +315,26 @@ bool ArrayCrossNumber::digit_shake() {
   for (Hint& h : this->hints) {
     init_product *= h.number_possible_values;
   }
-  // std::cout << "possible combinations: " << init_product << std::endl;
+  std::cout << "possible combinations: " << init_product << std::endl;
 
-  for (Hint& h : this->hints) {
+  for (Hint& h : hints) {
     int length = h.get_length();
     for (int l = 0; l < h.get_length(); l++) {
       if (h.get_is_horizontal()) {
         for (int i = 0; i < 10; i++) {
-          if (!tmp_digits[h.get_x_pos() + l + this->width * h.get_y_pos()][i]) {
-            h.possible_values.erase(
-                std::remove_if(h.possible_values.begin(),
-                               h.possible_values.end(),
-                               [=](int val) {
-                                 return get_nth_digit(val, l, length) == i;
-                               }),
-                h.possible_values.end());
+          if (!tmp_digits[h.get_x_pos() + l + width * h.get_y_pos()][i]) {
+            std::erase_if(h.possible_values, [=](int val) {
+              return get_nth_digit(val, l, length) == i;
+            });
             h.number_possible_values = h.possible_values.size();
           }
         }
       } else {
         for (int i = 0; i < 10; i++) {
-          if (!tmp_digits[h.get_x_pos() + this->width * (h.get_y_pos() + l)]
-                         [i]) {
-            h.possible_values.erase(
-                std::remove_if(h.possible_values.begin(),
-                               h.possible_values.end(),
-                               [=](int val) {
-                                 return get_nth_digit(val, l, length) == i;
-                               }),
-                h.possible_values.end());
+          if (!tmp_digits[h.get_x_pos() + width * (h.get_y_pos() + l)][i]) {
+            std::erase_if(h.possible_values, [=](int val) {
+              return get_nth_digit(val, l, length) == i;
+            });
             h.number_possible_values = h.possible_values.size();
           }
         }
@@ -339,22 +343,16 @@ bool ArrayCrossNumber::digit_shake() {
   }
 
   double final_product = 1.0;
-  for (Hint& h : this->hints) {
+  for (Hint& h : hints) {
     final_product *= h.number_possible_values;
   }
-  // std::cout << "reduced from " << log10(init_product) << " to " <<
-  // log10(final_product) << std::endl;
+  std::cout << "possible combinations: " << final_product << std::endl;
+
   return init_product == final_product;
 }
 
 int ArrayCrossNumber::count_digits(int n) {
-  int c = 0;
-  for (int i = 0; i < MAX_SQUARE_COUNT; i++) {
-    if (value[i] == n) {
-      c++;
-    }
-  }
-  return c;
+  return std::count(value, value + width * height, n);
 }
 
 std::string ArrayCrossNumber::debug() {

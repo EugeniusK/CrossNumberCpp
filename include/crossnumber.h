@@ -1,13 +1,11 @@
 #ifndef CROSSNUMBER_H
 #define CROSSNUMBER_H
-#include <algorithm>
-#include <iostream>
+#include <functional>
 #include <string>
 #include <vector>
 
-#include "backtrackstack.h"
-#include "digit.h"
-#include "hints.h"
+// #include "digit.h"
+#include "hint.h"
 #include "utils.h"
 
 class CrossNumber {
@@ -35,7 +33,7 @@ class CrossNumber {
   // empty squares as |   |
   virtual std::string display_value() = 0;
 
-  // returns currently stored digit count from 0~9, separated by |
+  // returns table with digits 0~9 and their counts, separated by |
   virtual std::string display_digit_count() = 0;
 
   // set of methods for adding guesses to the crossnumber
@@ -106,9 +104,9 @@ class ArrayCrossNumber : public CrossNumber {
  private:
   int width;
   int height;
-  int layout[MAX_SQUARE_COUNT];    // only describes layout, location of clues
-  Digit digits[MAX_SQUARE_COUNT];  // possible digits for each square
-  int value[MAX_SQUARE_COUNT];     // value that board takes at the moment
+  int layout[MAX_SQUARE_COUNT];  // only describes layout, location of clues
+  // Digit digits[MAX_SQUARE_COUNT];  // possible digits for each square
+  int value[MAX_SQUARE_COUNT];  // value that board takes at the moment
 };
 
 #endif

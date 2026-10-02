@@ -1,7 +1,13 @@
 #include "solver_one.h"
 
 #include <algorithm>
+#include <array>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
+#include "backtrackstack.h"
 #include "utils.h"
 void SolverOne::solve(ArrayCrossNumber crossnumber) {
   int guesses[MAX_HINT_COUNT] = {0};
@@ -97,14 +103,6 @@ void SolverOne::solve(ArrayCrossNumber crossnumber) {
             std::cout << crossnumber.display_digit_count() << std::endl;
           }
 
-          if (get_nth_digit(crossnumber.get_value(1, 5, 3, true), 1, 3) ==
-              19 - crossnumber.count_digits(9)) {
-            if (crossnumber.get_value(8, 6, 2, true) ==
-                dsum(crossnumber.get_value(0, 4, 2, true))) {
-              std::cout << crossnumber.display_value() << std::endl;
-              std::cout << crossnumber.display_digit_count() << std::endl;
-            }
-          };
           crossnumber.clear_values(guesses, number_guesses);
         }
         // guess suceeded, go forward if possible
@@ -122,7 +120,5 @@ void SolverOne::solve(ArrayCrossNumber crossnumber) {
   }
 
   crossnumber.apply_values(guesses, number_guesses);
-  // std::cout << crossnumber.display_value() << std::endl;
-  // std::cout << crossnumber.display_digit_count() << std::endl;
   crossnumber.clear_values(guesses, number_guesses);
 }

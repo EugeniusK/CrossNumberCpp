@@ -1,25 +1,23 @@
 #ifndef AST_H
 #define AST_H
 
-#include <array>
-#include <functional>
-#include <iostream>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-#include "builtin.h"
-
 class Environment {
  public:
   std::unordered_map<std::string, int>::iterator find_var(std::string id);
+  bool has_var(std::string id);
+  std::unordered_map<std::string, int>::iterator var_end();
   int get_var(std::string id);
   void set_var(std::string id, int val);
-  void initialise_output_array(int len, int val);
+  void initialise_output_array(int len, int val = 0);
   void reset_output_array();
   int get_output_array(int idx);
   void set_output_array(int idx, int val);
-  void initialise_tmp_array(int len, int val);
+  void initialise_tmp_array(int len, int val = 0);
   void reset_tmp_array();
   int get_tmp_array(int idx);
   void set_tmp_array(int idx, int val);

@@ -1,10 +1,18 @@
-#include "builtin.h"
-#include "parser_new.h"
+#include "parser.h"
+
+#include <algorithm>
+#include <cctype>
+#include <memory>
+#include <stdexcept>
+#include <utility>
 void Parser::advance() { curr = lexer.next_token(); }
 
 void Parser::reset() {
   lexer.reset();
   advance();
+  list_variables.clear();
+  has_dependencies = false;
+  list_dependencies.clear();
 }
 void Parser::expect(const std::string& text) {
   if (curr.text != text)
@@ -19,10 +27,11 @@ Parser::Parser(Lexer l) : lexer(std::move(l)) {
 }
 
 std::string Parser::print_list_variables() {
-  std::string output = "";
-  for (auto it = list_variables.begin(); it != list_variables.end(); it++) {
-    output = output + *it + " ";
-  };
+  std::string output;
+  for (const auto& var : list_variables) {
+    output += var;
+    output += ' ';
+  }
   return output;
 }
 
@@ -54,8 +63,11 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {
     return parse_block();
   }
 
+  if (curr.type != TokenType::Identifier) {
+    throw std::runtime_error("Expected identifier, got '" + curr.text + "'");
+  }
   std::string name = curr.text;
-  expect(curr.text);
+  advance();
 
   if (curr.text == "[") {
     advance();
@@ -87,8 +99,12 @@ std::unique_ptr<StmtNode> Parser::parse_block() {
 
 std::unique_ptr<StmtNode> Parser::parse_var_decl() {
   advance();  // consume 'let'
+  if (curr.type != TokenType::Identifier) {
+    throw std::runtime_error("Expected identifier after 'let', got '" +
+                             curr.text + "'");
+  }
   std::string name = curr.text;
-  expect(curr.text);
+  advance();
   expect("=");
   auto expr = parse_expr();
   expect(";");
@@ -96,8 +112,11 @@ std::unique_ptr<StmtNode> Parser::parse_var_decl() {
 }
 
 std::unique_ptr<StmtNode> Parser::parse_assign_stmt() {
+  if (curr.type != TokenType::Identifier) {
+    throw std::runtime_error("Expected identifier, got '" + curr.text + "'");
+  }
   std::string name = curr.text;
-  expect(curr.text);
+  advance();
   expect("=");
   auto expr = parse_expr();
   expect(";");
@@ -145,8 +164,12 @@ std::unique_ptr<StmtNode> Parser::parse_for_stmt() {
   expect(";");
 
   // 3. Step/Update without trailing semicolon (x = x + 1)
+  if (curr.type != TokenType::Identifier) {
+    throw std::runtime_error("Expected identifier in for-loop update, got '" +
+                             curr.text + "'");
+  }
   std::string update_var = curr.text;
-  expect(curr.text);
+  advance();
   expect("=");
   auto update_expr = parse_expr();
   auto update =
@@ -267,22 +290,23 @@ std::unique_ptr<ExprNode> Parser::parse_primary() {
       return std::make_unique<FunctionCallNode>(id, std::move(args));
     }
 
-    list_variables.insert(id);
-    if ((id[0] == 'a' || id[0] == 'd') && id.size() > 1) {
-      bool reserved = true;
-      for (int i = 1; i < id.size() - 1; i++) {
-        if (!std::isdigit(id[i])) {
-          reserved = false;
-          break;
-        }
-      }
-      if (reserved) {
-        has_dependencies = true;
-        list_dependencies.insert(id);
-      };
+    if (curr.text == "[") {
+      advance();
+      auto index = parse_expr();
+
+      expect("]");
+      return std::make_unique<IndexReadNode>(id, std::move(index));
     }
 
-    if (id[0] == 'c' && id.size() == 2 && std::isdigit(id[1])) {
+    list_variables.insert(id);
+    bool is_across_or_down =
+        (id[0] == 'a' || id[0] == 'd') && id.size() > 1 &&
+        std::all_of(id.begin() + 1, id.end(),
+                    [](unsigned char c) { return std::isdigit(c); });
+    bool is_digit_count = id[0] == 'c' && id.size() == 2 &&
+                          std::isdigit(static_cast<unsigned char>(id[1]));
+
+    if (is_across_or_down || is_digit_count) {
       has_dependencies = true;
       list_dependencies.insert(id);
     }

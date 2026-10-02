@@ -1,21 +1,22 @@
 #ifndef BACKTRACKSTACK_H
 #define BACKTRACKSTACK_H
+#include <array>
 #include <string>
 
 #include "utils.h"
 
 class BacktrackStack {
  public:
-  BacktrackStack();
+  BacktrackStack() = default;
   void push(int val);
   int pop();
-  int get_top();
-  int get_head();
-  int get_size();
-  std::string display();
+  int get_top() const;
+  int get_head() const;
+  int get_size() const;
+  std::string display() const;
 
  private:
-  int stack[MAX_HINT_COUNT];
+  std::array<int, MAX_HINT_COUNT> stack{};
   int top = 0;
 };
 #endif

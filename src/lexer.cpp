@@ -1,25 +1,43 @@
-#include <iostream>
+#include "lexer.h"
 
-#include "lexer_new.h"
-Lexer::Lexer(std::string source) : src(std::move(source)) {};
+#include <cctype>
+#include <stdexcept>
+#include <string_view>
+#include <utility>
+Lexer::Lexer(std::string source) : src(std::move(source)) {}
 void Lexer::reset() { pos = 0; }
 Token Lexer::next_token() {
-  while (pos < src.size() && std::isspace(src[pos])) pos++;
+  while (pos < src.size()) {
+    if (std::isspace(static_cast<unsigned char>(src[pos]))) {
+      pos++;
+    } else if (pos + 1 < src.size() && src[pos] == '/' && src[pos + 1] == '/') {
+      pos += 2;
+      while (pos < src.size() && src[pos] != '\n') {
+        pos++;
+      }
+    } else {
+      break;
+    }
+  }
   if (pos >= src.size()) return {TokenType::End, ""};
 
   char c = src[pos];
 
   // number case
-  if (std::isdigit(c)) {
+  if (std::isdigit(static_cast<unsigned char>(c))) {
     size_t start = pos;
-    while (pos < src.size() && std::isdigit(src[pos])) pos++;
+    while (pos < src.size() &&
+           std::isdigit(static_cast<unsigned char>(src[pos])))
+      pos++;
     return {TokenType::Number, src.substr(start, pos - start)};
   }
 
   // identifiers
-  if (std::isalpha(c) || c == '_') {
+  if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
     size_t start = pos;
-    while (pos < src.size() && (std::isalnum(src[pos]) || src[pos] == '_'))
+    while (pos < src.size() &&
+           (std::isalnum(static_cast<unsigned char>(src[pos])) ||
+            src[pos] == '_'))
       pos++;
     std::string word = src.substr(start, pos - start);
     if (word == "true" || word == "false") {
@@ -29,7 +47,7 @@ Token Lexer::next_token() {
       return {TokenType::Keyword, word};
     }
     return {TokenType::Identifier, word};
-  };
+  }
 
   // two character operations
   if (pos + 1 < src.size()) {
@@ -39,7 +57,7 @@ Token Lexer::next_token() {
       pos += 2;
       return {TokenType::Operator, pair};
     }
-  };
+  }
 
   pos++;
 
@@ -52,39 +70,43 @@ Token Lexer::next_token() {
   if (c == ']') return {TokenType::CloseBracket, "]"};
   if (c == ',') return {TokenType::Comma, ","};
 
-  if (std::string("+-*/%=!<>").find(c) != std::string::npos) {
+  if (std::string_view("+-*/%=!<>").find(c) != std::string_view::npos) {
     return {TokenType::Operator, std::string(1, c)};
-  };
+  }
 
   throw std::runtime_error(std::string("Unexpected character: ") + c);
 }
 
 std::string print_token(Token t) {
-  std::string type;
-  switch (static_cast<int>(t.type)) {
-    case 0:
+  switch (t.type) {
+    case TokenType::Number:
       return "Number[" + t.text + "]";
-    case 1:
+    case TokenType::Boolean:
       return "Boolean[" + t.text + "]";
-    case 2:
+    case TokenType::Identifier:
       return "Identifier[" + t.text + "]";
-    case 3:
+    case TokenType::Operator:
       return "Operator[" + t.text + "]";
-    case 4:
+    case TokenType::Keyword:
       return "Keyword[" + t.text + "]";
-    case 5:
-      return "Newline";
-    case 6:
+    case TokenType::SemiColon:
+      return "SemiColon";
+    case TokenType::OpenParen:
       return "OpenParen";
-    case 7:
+    case TokenType::CloseParen:
       return "CloseParen";
-    case 8:
+    case TokenType::OpenBrace:
       return "OpenBrace";
-    case 9:
-      return "ClosBrace";
-    case 10:
+    case TokenType::CloseBrace:
+      return "CloseBrace";
+    case TokenType::OpenBracket:
+      return "OpenBracket";
+    case TokenType::CloseBracket:
+      return "CloseBracket";
+    case TokenType::Comma:
+      return "Comma";
+    case TokenType::End:
       return "End";
-    default:
-      return "error";
   }
+  return "error";
 }

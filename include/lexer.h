@@ -1,5 +1,5 @@
-#ifndef LEXER_NEW_H
-#define LEXER_NEW_H
+#ifndef LEXER_H
+#define LEXER_H
 
 #include <string>
 

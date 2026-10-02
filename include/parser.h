@@ -1,10 +1,12 @@
-#ifndef PARSER_NEW_H
-#define PARSER_NEW_H
+#ifndef PARSER_H
+#define PARSER_H
 
+#include <memory>
 #include <set>
+#include <string>
 
 #include "ast.h"
-#include "lexer_new.h"
+#include "lexer.h"
 
 class Parser {
  public:

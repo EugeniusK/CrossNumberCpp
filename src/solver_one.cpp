@@ -38,6 +38,44 @@ void SolverOne::solve(ArrayCrossNumber crossnumber) {
               return a.number_possible_values < b.number_possible_values;
             });
 
+  struct DepHintBinding {
+    size_t dep_hint_idx;
+    int slot;
+  };
+  struct DepCountBinding {
+    int digit;
+    int slot;
+  };
+  struct PreResolvedHintDeps {
+    size_t hint_idx;
+    std::vector<DepHintBinding> hint_bindings;
+    std::vector<DepCountBinding> count_bindings;
+  };
+
+  std::vector<PreResolvedHintDeps> resolved_deps;
+  for (size_t i = 0; i < crossnumber.hints.size(); ++i) {
+    Hint& h = crossnumber.hints[i].get();
+    if (h.get_if_has_dependencies()) {
+      PreResolvedHintDeps prhd;
+      prhd.hint_idx = i;
+      for (const std::string& s : h.get_dependencies()) {
+        int slot = h.get_slot_for_var(s);
+        if (s[0] == 'a' || s[0] == 'd') {
+          for (size_t j = 0; j < crossnumber.hints.size(); ++j) {
+            if (crossnumber.hints[j].get().get_identifier() == s) {
+              prhd.hint_bindings.push_back({j, slot});
+              break;
+            }
+          }
+        } else if (s[0] == 'c') {
+          int digit = s[1] - '0';
+          prhd.count_bindings.push_back({digit, slot});
+        }
+      }
+      resolved_deps.push_back(std::move(prhd));
+    }
+  }
+
   auto start_time = std::chrono::steady_clock::now();
   auto last_update_time = start_time;
   long long combinations_explored = 0;
@@ -143,42 +181,26 @@ void SolverOne::solve(ArrayCrossNumber crossnumber) {
           crossnumber.apply_values(guesses, number_guesses);
 
           bool with_valid_dependencies = true;
-          for (Hint& h : crossnumber.hints) {
-            if (h.get_if_has_dependencies()) {
-              for (std::string s : h.get_dependencies()) {
-                if (s[0] == 'a') {
-                  for (Hint& dependent_hint : crossnumber.hints) {
-                    if (dependent_hint.get_identifier() ==
-                            std::stoi(s.substr(1, s.size() - 1)) &&
-                        dependent_hint.get_is_horizontal()) {
-                      h.set_env(s, crossnumber.get_value(dependent_hint));
-                    }
-                  }
-                } else if (s[0] == 'd') {
-                  for (Hint& dependent_hint : crossnumber.hints) {
-                    if (dependent_hint.get_identifier() ==
-                            std::stoi(s.substr(1, s.size() - 1)) &&
-                        !dependent_hint.get_is_horizontal()) {
-                      h.set_env(s, crossnumber.get_value(dependent_hint));
-                    }
-                  }
-                } else if (s[0] == 'c') {
-                  h.set_env(
-                      s, crossnumber.count_digits(std::stoi(s.substr(1, 1))));
-                }
-              }
-              h.run_program_on_dependency();
-              if (h.get_output_array(crossnumber.get_value(h)) == 0) {
-                with_valid_dependencies = false;
-              }
+          for (const auto& prhd : resolved_deps) {
+            Hint& h = crossnumber.hints[prhd.hint_idx].get();
+            for (const auto& hb : prhd.hint_bindings) {
+              h.set_slot_env(hb.slot, crossnumber.get_value(crossnumber.hints[hb.dep_hint_idx].get()));
+            }
+            for (const auto& cb : prhd.count_bindings) {
+              h.set_slot_env(cb.slot, crossnumber.count_digits(cb.digit));
+            }
+            h.run_program_on_dependency();
+            if (h.get_output_array(crossnumber.get_value(h)) == 0) {
+              with_valid_dependencies = false;
+              break;
             }
           }
 
           if (with_valid_dependencies) {
             std::cout << "\r" << std::string(100, ' ') << "\r";
             std::cout << "solved" << std::endl;
-            // std::cout << crossnumber.display_value() << std::endl;
-            // std::cout << crossnumber.display_digit_count() << std::endl;
+            std::cout << crossnumber.display_value() << std::endl;
+            std::cout << crossnumber.display_digit_count() << std::endl;
             last_update_time = std::chrono::steady_clock::now();
           }
 

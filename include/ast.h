@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -16,11 +17,11 @@ class Environment {
   int get_or_create_slot(const std::string& id);
   int find_slot(const std::string& id) const;
 
-  int get_slot_value(int slot) const {
+  inline int get_slot_value(int slot) const noexcept {
     return slots_[slot];
   }
 
-  void set_slot_value(int slot, int val) {
+  inline void set_slot_value(int slot, int val) noexcept {
     slots_[slot] = val;
   }
 
@@ -57,12 +58,14 @@ class ExprNode {
  public:
   virtual ~ExprNode() = default;
   virtual int evaluate(Environment& env) = 0;
+  virtual void resolve_slots(Environment& env) = 0;
 };
 
 class LiteralNode : public ExprNode {
  public:
   LiteralNode(int val);
-  int evaluate(Environment& env);
+  int evaluate(Environment& env) override;
+  void resolve_slots(Environment& env) override;
 
  private:
   int value;
@@ -72,43 +75,80 @@ class LiteralNode : public ExprNode {
 class VariableNode : public ExprNode {
  public:
   VariableNode(std::string n);
-  int evaluate(Environment& env);
+  int evaluate(Environment& env) override;
+  void resolve_slots(Environment& env) override;
 
  private:
   std::string name;
+  int slot_ = -1;
 };
+
+enum class UnaryOp {
+  Plus,
+  Minus,
+  LogicalNot
+};
+
+enum class BinaryOp : uint8_t {
+  Add = 0,
+  Subtract = 1,
+  Multiply = 2,
+  Divide = 3,
+  Modulo = 4,
+  Equal = 5,
+  NotEqual = 6,
+  Less = 7,
+  LessEqual = 8,
+  Greater = 9,
+  GreaterEqual = 10,
+  LogicalAnd = 11,
+  LogicalOr = 12
+};
+
+BinaryOp string_to_binary_op(std::string_view o);
+UnaryOp string_to_unary_op(std::string_view o);
 
 class UnaryOpNode : public ExprNode {
  public:
-  UnaryOpNode(std::string o, std::unique_ptr<ExprNode> expr);
-  int evaluate(Environment& env);
+  UnaryOpNode(UnaryOp o, std::unique_ptr<ExprNode> expr);
+  UnaryOpNode(const std::string& o, std::unique_ptr<ExprNode> expr);
+  int evaluate(Environment& env) override;
+  void resolve_slots(Environment& env) override;
 
  private:
-  std::string op;
+  UnaryOp op;
   std::unique_ptr<ExprNode> operand;
+  ExprNode* operand_ = nullptr;
 };
 
 class BinaryOpNode : public ExprNode {
  public:
-  BinaryOpNode(std::string o, std::unique_ptr<ExprNode> expr1,
+  BinaryOpNode(BinaryOp o, std::unique_ptr<ExprNode> expr1,
                std::unique_ptr<ExprNode> expr2);
-  int evaluate(Environment& env);
+  BinaryOpNode(const std::string& o, std::unique_ptr<ExprNode> expr1,
+               std::unique_ptr<ExprNode> expr2);
+  int evaluate(Environment& env) override;
+  void resolve_slots(Environment& env) override;
 
  private:
-  std::string op;
+  BinaryOp op;
   std::unique_ptr<ExprNode> operand1;
   std::unique_ptr<ExprNode> operand2;
+  ExprNode* left_ = nullptr;
+  ExprNode* right_ = nullptr;
 };
 
 // tmp[x] or output[x]
 class IndexReadNode : public ExprNode {
  public:
   IndexReadNode(std::string n, std::unique_ptr<ExprNode> i);
-  int evaluate(Environment& env);
+  int evaluate(Environment& env) override;
+  void resolve_slots(Environment& env) override;
 
  private:
   std::string name;
   std::unique_ptr<ExprNode> expr;
+  bool is_tmp_ = false;
 };
 
 // func(x,y)
@@ -116,49 +156,58 @@ class FunctionCallNode : public ExprNode {
  public:
   FunctionCallNode(std::string n, std::vector<std::unique_ptr<ExprNode>> a);
   int evaluate(Environment& env) override;
+  void resolve_slots(Environment& env) override;
 
  private:
   std::string name;
   std::vector<std::unique_ptr<ExprNode>> args;
-  BuiltinFn fn_;
-  mutable std::vector<int> evaluated_args;
+  BuiltinFn builtin_id_;
+  size_t arity_ = 0;
+  ExprNode* args_[4] = {nullptr, nullptr, nullptr, nullptr};
 };
 
 class StmtNode {
  public:
   virtual ~StmtNode() = default;
   virtual void execute(Environment& env) = 0;
+  virtual void resolve_slots(Environment& env) = 0;
 };
 
 class BlockStmtNode : public StmtNode {
  public:
   void add_statement(std::unique_ptr<StmtNode> stmt);
-  void execute(Environment& env);
+  void execute(Environment& env) override;
+  void resolve_slots(Environment& env) override;
 
  private:
-  std::vector<std::unique_ptr<StmtNode>> statements;
+  std::vector<std::unique_ptr<StmtNode>> owned_statements_;
+  std::vector<StmtNode*> statements_;
 };
 
 // let x = 5;
 class VarDeclNode : public StmtNode {
  public:
   VarDeclNode(std::string n, std::unique_ptr<ExprNode> i);
-  void execute(Environment& env);
+  void execute(Environment& env) override;
+  void resolve_slots(Environment& env) override;
 
  private:
   std::string name;
   std::unique_ptr<ExprNode> init;
+  int slot_ = -1;
 };
 
 // x = 5;
 class AssignStmtNode : public StmtNode {
  public:
   AssignStmtNode(std::string n, std::unique_ptr<ExprNode> e);
-  void execute(Environment& env);
+  void execute(Environment& env) override;
+  void resolve_slots(Environment& env) override;
 
  private:
   std::string name;
   std::unique_ptr<ExprNode> expr;
+  int slot_ = -1;
 };
 
 // tmp[x] = 5;
@@ -166,19 +215,22 @@ class IndexAssignStmtNode : public StmtNode {
  public:
   IndexAssignStmtNode(std::string n, std::unique_ptr<ExprNode> i,
                       std::unique_ptr<ExprNode> v);
-  void execute(Environment& env);
+  void execute(Environment& env) override;
+  void resolve_slots(Environment& env) override;
 
  private:
   std::string name;
   std::unique_ptr<ExprNode> idx_expr;
   std::unique_ptr<ExprNode> val_expr;
+  bool is_tmp_ = false;
 };
 
 // print(x);
 class PrintStmtNode : public StmtNode {
  public:
   explicit PrintStmtNode(std::unique_ptr<ExprNode> e);
-  void execute(Environment& env);
+  void execute(Environment& env) override;
+  void resolve_slots(Environment& env) override;
 
  private:
   std::unique_ptr<ExprNode> expr;
@@ -189,7 +241,8 @@ class IfStmtNode : public StmtNode {
   IfStmtNode(std::unique_ptr<ExprNode> c, std::unique_ptr<StmtNode> t,
              std::unique_ptr<StmtNode> e);
 
-  void execute(Environment& env);
+  void execute(Environment& env) override;
+  void resolve_slots(Environment& env) override;
 
  private:
   std::unique_ptr<ExprNode> cond;
@@ -202,7 +255,8 @@ class ForStmtNode : public StmtNode {
   ForStmtNode(std::unique_ptr<StmtNode> i, std::unique_ptr<ExprNode> c,
               std::unique_ptr<StmtNode> u, std::unique_ptr<StmtNode> b);
 
-  void execute(Environment& env);
+  void execute(Environment& env) override;
+  void resolve_slots(Environment& env) override;
 
  private:
   std::unique_ptr<StmtNode> init;
@@ -214,7 +268,8 @@ class ForStmtNode : public StmtNode {
 class WhileStmtNode : public StmtNode {
  public:
   WhileStmtNode(std::unique_ptr<ExprNode> cond, std::unique_ptr<StmtNode> b);
-  void execute(Environment& env);
+  void execute(Environment& env) override;
+  void resolve_slots(Environment& env) override;
 
  private:
   std::unique_ptr<ExprNode> condition;

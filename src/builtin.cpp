@@ -1,121 +1,65 @@
 #include "builtin.h"
 
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <stdexcept>
 
-// Core math & digit utilities
-bool is_prime(int n) {
-  if (n < 2) return false;
-  for (long long i = 2; i * i <= n; ++i) {
-    if (n % i == 0) return false;
+DsumLut::DsumLut() {
+  table[0] = 0;
+  for (int i = 1; i < DSUM_LUT_SIZE; ++i) {
+    table[i] = static_cast<uint8_t>(table[i / 10] + (i % 10));
   }
-  return true;
 }
 
-int ipow(int base, int exp) {
-  int result = 1;
-  for (int i = 0; i < exp; ++i) {
-    result *= base;
-  }
-  return result;
-}
-
-int digit_count(int n) {
-  int num = std::abs(n);
-  if (num == 0) return 1;
-
-  int count = 0;
-  while (num != 0) {
-    num /= 10;
-    count++;
-  }
-  return count;
-}
-
-int reverse_num(int n) {
-  int num = std::abs(n);
-  int rev_num = 0;
-  while (num > 0) {
-    rev_num = rev_num * 10 + num % 10;
-    num /= 10;
-  }
-  return rev_num;
-}
-
-int dsum(int n) {
-  int sum = 0;
-  int num = std::abs(n);
-  while (num != 0) {
-    sum += num % 10;
-    num /= 10;
-  }
-  return sum;
-}
-
-int get_nth_digit(int n, int digit, int total_digit) {
-  return (n / ipow(10, total_digit - digit - 1)) % 10;
-}
-
-int isqrt(int n) {
-  if (n < 0) {
-    throw std::runtime_error("isqrt() requires non-negative argument");
-  }
-  return static_cast<int>(std::sqrt(n));
-}
+const DsumLut g_dsum_lut;
 
 namespace {
 
-int fn_prime(const std::vector<int>& args) {
-  if (args.size() != 1) {
+int fn_prime(const int* args, size_t count) {
+  if (count != 1) {
     throw std::runtime_error("is_prime() requires exactly 1 argument");
   }
   return is_prime(args[0]) ? 1 : 0;
 }
 
-int fn_palindrome(const std::vector<int>& args) {
-  if (args.size() != 1) {
+int fn_palindrome(const int* args, size_t count) {
+  if (count != 1) {
     throw std::runtime_error("is_palindrome() requires exactly 1 argument");
   }
   return (args[0] == reverse_num(args[0])) ? 1 : 0;
 }
 
-int fn_pow(const std::vector<int>& args) {
-  if (args.size() != 2) {
+int fn_pow(const int* args, size_t count) {
+  if (count != 2) {
     throw std::runtime_error("pow() requires exactly 2 arguments");
   }
   return ipow(args[0], args[1]);
 }
 
-int fn_isqrt(const std::vector<int>& args) {
-  if (args.size() != 1) {
+int fn_isqrt(const int* args, size_t count) {
+  if (count != 1) {
     throw std::runtime_error("isqrt() requires exactly 1 argument");
   }
   return isqrt(args[0]);
 }
 
-int fn_dsum(const std::vector<int>& args) {
-  if (args.size() != 1) {
+int fn_dsum(const int* args, size_t count) {
+  if (count != 1) {
     throw std::runtime_error("dsum() requires exactly 1 argument");
   }
   return dsum(args[0]);
 }
 
-int fn_get_nth_digit(const std::vector<int>& args) {
-  if (args.size() != 2) {
+int fn_get_nth_digit(const int* args, size_t count) {
+  if (count != 2) {
     throw std::runtime_error("get_nth_digit() requires exactly 2 arguments");
   }
-  int num = std::abs(args[0]);
-  int n = args[1];
-  int count = digit_count(num);
-  if (n <= 0 || n > count) {
-    return 0;
-  }
-  return get_nth_digit(num, n - 1, count);
+  return get_nth_digit(args[0], args[1] - 1);
 }
 
-int fn_reverse(const std::vector<int>& args) {
-  if (args.size() != 1) {
+int fn_reverse(const int* args, size_t count) {
+  if (count != 1) {
     throw std::runtime_error("reverse() requires exactly 1 argument");
   }
   return reverse_num(args[0]);
@@ -124,13 +68,11 @@ int fn_reverse(const std::vector<int>& args) {
 }  // anonymous namespace
 
 const BuiltinTable& get_builtin_functions() {
-  static const BuiltinTable registry = {{"is_prime", fn_prime},
-                                        {"is_palindrome", fn_palindrome},
-                                        {"pow", fn_pow},
-                                        {"isqrt", fn_isqrt},
-                                        {"dsum", fn_dsum},
-                                        {"get_nth_digit", fn_get_nth_digit},
-                                        {"reverse", fn_reverse}};
+  static const BuiltinTable registry = {
+      {"is_prime", fn_prime}, {"is_palindrome", fn_palindrome},
+      {"pow", fn_pow},        {"isqrt", fn_isqrt},
+      {"dsum", fn_dsum},      {"get_nth_digit", fn_get_nth_digit},
+      {"reverse", fn_reverse}};
 
   return registry;
 }

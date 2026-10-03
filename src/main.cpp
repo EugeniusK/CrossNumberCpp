@@ -75,7 +75,7 @@ int main(int argc, char* argv[]) {
 
   CoutSilencer silencer(!verbose);
 
-  for (int i = 0; i < 100; ++i) {
+  for (int i = 0; i < 1; ++i) {
     try {
       PuzzleData puzzle = load_puzzle(puzzle_file);
       const std::vector<int>& ryder = puzzle.grid;

@@ -188,7 +188,7 @@ std::unique_ptr<ExprNode> Parser::parse_precedence_15() {
   auto node = parse_precedence_14();
   while (curr.text == "||") {
     advance();
-    node = std::make_unique<BinaryOpNode>("||", std::move(node),
+    node = std::make_unique<BinaryOpNode>(BinaryOp::LogicalOr, std::move(node),
                                           parse_precedence_14());
   }
   return node;
@@ -197,7 +197,7 @@ std::unique_ptr<ExprNode> Parser::parse_precedence_14() {
   auto node = parse_precedence_10();
   while (curr.text == "&&") {
     advance();
-    node = std::make_unique<BinaryOpNode>("&&", std::move(node),
+    node = std::make_unique<BinaryOpNode>(BinaryOp::LogicalAnd, std::move(node),
                                           parse_precedence_10());
   }
   return node;
@@ -205,7 +205,7 @@ std::unique_ptr<ExprNode> Parser::parse_precedence_14() {
 std::unique_ptr<ExprNode> Parser::parse_precedence_10() {
   auto node = parse_precedence_09();
   while (curr.text == "==" || curr.text == "!=") {
-    std::string op = curr.text;
+    BinaryOp op = (curr.text == "==") ? BinaryOp::Equal : BinaryOp::NotEqual;
     advance();
     node = std::make_unique<BinaryOpNode>(op, std::move(node),
                                           parse_precedence_09());
@@ -216,7 +216,7 @@ std::unique_ptr<ExprNode> Parser::parse_precedence_09() {
   auto node = parse_precedence_06();
   while (curr.text == "<" || curr.text == "<=" || curr.text == ">" ||
          curr.text == ">=") {
-    std::string op = curr.text;
+    BinaryOp op = string_to_binary_op(curr.text);
     advance();
     node = std::make_unique<BinaryOpNode>(op, std::move(node),
                                           parse_precedence_06());
@@ -226,7 +226,7 @@ std::unique_ptr<ExprNode> Parser::parse_precedence_09() {
 std::unique_ptr<ExprNode> Parser::parse_precedence_06() {
   auto node = parse_precedence_05();
   while (curr.text == "+" || curr.text == "-") {
-    std::string op = curr.text;
+    BinaryOp op = (curr.text == "+") ? BinaryOp::Add : BinaryOp::Subtract;
     advance();
     node = std::make_unique<BinaryOpNode>(op, std::move(node),
                                           parse_precedence_05());
@@ -236,7 +236,9 @@ std::unique_ptr<ExprNode> Parser::parse_precedence_06() {
 std::unique_ptr<ExprNode> Parser::parse_precedence_05() {
   auto node = parse_precedence_03();
   while (curr.text == "*" || curr.text == "/" || curr.text == "%") {
-    std::string op = curr.text;
+    BinaryOp op = (curr.text == "*") ? BinaryOp::Multiply
+                  : (curr.text == "/") ? BinaryOp::Divide
+                                       : BinaryOp::Modulo;
     advance();
     node = std::make_unique<BinaryOpNode>(op, std::move(node),
                                           parse_precedence_03());
@@ -245,7 +247,7 @@ std::unique_ptr<ExprNode> Parser::parse_precedence_05() {
 }
 std::unique_ptr<ExprNode> Parser::parse_precedence_03() {
   if (curr.text == "+" || curr.text == "-" || curr.text == "!") {
-    std::string op = curr.text;
+    UnaryOp op = string_to_unary_op(curr.text);
     advance();
     return std::make_unique<UnaryOpNode>(op, parse_precedence_03());
   }

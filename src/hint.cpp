@@ -9,11 +9,13 @@
 Hint::Hint(int id, int is_hor, std::string program)
     : Parser(Lexer(std::move(program))),
       number_possible_values(0),
-      identifier(id),
+      partial_identifier(id),
       is_horizontal(is_hor),
       length(0),
       x_pos(0),
-      y_pos(0) {}
+      y_pos(0) {
+  identifier = (is_hor ? "a" : "d") + std::to_string(id);
+}
 
 bool Hint::get_if_has_dependencies() const { return has_dependencies; }
 
@@ -27,8 +29,8 @@ void Hint::set_env(const std::string& variable_name, int val) {
 
 int Hint::get_output_array(int idx) { return env.get_output_array(idx); }
 
-int Hint::get_identifier() const { return identifier; }
-
+int Hint::get_partial_identifier() const { return partial_identifier; }
+std::string Hint::get_identifier() const { return identifier; }
 bool Hint::get_is_horizontal() const { return is_horizontal; }
 
 int Hint::get_length() const { return length; }
@@ -46,6 +48,10 @@ void Hint::run_program_on_load() {
   env.initialise_output_array(static_cast<int>(ipow(10, length)), 0);
   env.initialise_tmp_array(static_cast<int>(ipow(10, length)), 0);
   cached_program = parse_program();
+  for (const auto& dep : list_dependencies) {
+    env.get_or_create_slot(dep);
+  }
+  cached_program->resolve_slots(env);
   if (!get_if_has_dependencies()) {
     cached_program->execute(env);
 
@@ -74,6 +80,10 @@ void Hint::run_program_on_dependency() {
   if (!cached_program) {
     reset();
     cached_program = parse_program();
+    for (const auto& dep : list_dependencies) {
+      env.get_or_create_slot(dep);
+    }
+    cached_program->resolve_slots(env);
   }
   cached_program->execute(env);
 }

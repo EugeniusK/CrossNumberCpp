@@ -196,7 +196,7 @@ void ArrayCrossNumber::load_hint(Hint& hint) {
   // if not found, throw error
   bool found = false;
   for (int i = 0; i < this->width * this->height; i++) {
-    if (layout[i] == hint.get_identifier()) {
+    if (layout[i] == hint.get_partial_identifier()) {
       found = true;
       hint.set_x_pos(i % width);
       hint.set_y_pos(i / width);
@@ -234,8 +234,8 @@ void ArrayCrossNumber::load_hint(Hint& hint) {
   if (length < 2) {
     throw std::logic_error(
         "Hint " + std::string(hint.get_is_horizontal() ? "a" : "d") +
-        std::to_string(hint.get_identifier()) + " refers to a number with " +
-        std::to_string(length) +
+        std::to_string(hint.get_partial_identifier()) +
+        " refers to a number with " + std::to_string(length) +
         " digit(s): all hints must refer to numbers with two or more digits");
   }
 
@@ -425,7 +425,7 @@ bool ArrayCrossNumber::digit_shake_with_dependencies() {
       remaining_hints.erase(best_it);
 
       std::string clue_name = (h.get_is_horizontal() ? "a" : "d") +
-                              std::to_string(h.get_identifier());
+                              std::to_string(h.get_partial_identifier());
       long long combinations_count = compute_combinations(h);
       int old_possible_count = h.number_possible_values;
 
@@ -649,7 +649,7 @@ Hint& ArrayCrossNumber::get_hint(const std::string& identifier) const {
 
   bool is_hor = (type == 'a');
   for (Hint& h : this->hints) {
-    if (h.get_identifier() == id && h.get_is_horizontal() == is_hor) {
+    if (h.get_partial_identifier() == id && h.get_is_horizontal() == is_hor) {
       return h;
     }
   }

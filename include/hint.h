@@ -10,6 +10,12 @@ class Hint : Parser {
  public:
   Hint(int identifier, int is_horizontal, std::string program = "");
   void set_env(const std::string& variable_name, int val);
+  int get_slot_for_var(const std::string& variable_name) const {
+    return env.find_slot(variable_name);
+  }
+  void set_slot_env(int slot, int val) {
+    env.set_slot_value(slot, val);
+  }
   int get_output_array(int idx);
   const std::vector<int>& get_written_output_indices() const;
   bool get_if_has_dependencies() const;
@@ -18,7 +24,8 @@ class Hint : Parser {
   std::vector<int> possible_values;
   int number_possible_values;
 
-  int get_identifier() const;
+  int get_partial_identifier() const;
+  std::string get_identifier() const;
   bool get_is_horizontal() const;
 
   int get_length() const;
@@ -33,7 +40,8 @@ class Hint : Parser {
   void set_y_pos(int pos);
 
  private:
-  int identifier;
+  int partial_identifier;
+  std::string identifier;
   bool is_horizontal;
   int length = 0;
   int x_pos = 0;

@@ -1,0 +1,141 @@
+================================================================================
+CrossNumber Optimization & Refactoring Progress Summary
+================================================================================
+
+1. OVERVIEW & OBJECTIVES
+--------------------------------------------------------------------------------
+This session focused on high-impact performance engineering across the solver engine
+and AST interpreter hot paths, eliminating profiling hotspots identified via Instruments
+Time Profiler traces on complex puzzle benchmarks (notably Problems/eijsink.puzzle).
+
+Benchmark Results Summary:
+  * Session Baseline Runtime:         5.88s (~949k nodes/sec)
+  * Post try_values Optimizations:    5.02s (~1.10M nodes/sec)
+  * Post AST Constant Folding:        4.40s (~1.24M nodes/sec)
+  * Post AST Node Specialization:     3.48s (~1.58M nodes/sec)
+  * Total Session Speedup:            ~41% execution time reduction (5.88s -> 3.48s)
+                                      +66% search throughput increase (949k -> 1.58M/s)
+
+
+2. COMPLETED OPTIMIZATIONS & ARCHITECTURAL CHANGES
+--------------------------------------------------------------------------------
+
+A. try_values Search & Verification Overhaul (ArrayCrossNumber)
+--------------------------------------------------------------------------------
+- Problem:
+  Instruments line-by-line profiling showed substantial overhead in try_values:
+  1. Testing every candidate against fixed board cells on every backtracking step (187ms),
+     even though the board is completely static throughout the entire search.
+  2. Outer loop verifying all count clues and re-calculating coordinates (140ms).
+  3. Re-verifying mutual intersections of previously verified clue pairs (190ms).
+  4. std::vector bounds-checking / wrapper overhead in try_values (86ms).
+
+- Solutions Implemented:
+  1. Startup Board Candidate Pruning:
+     In ArrayCrossNumber::init_intersections, pre-filtered each clue's candidate list
+     against fixed board cells once at initialization. This statically guaranteed that
+     any candidate considered during search conforms to all fixed board digits, allowing
+     the entire 187ms fixed-board verification loop in try_values to be eliminated.
+  2. Incremental Backtracking Verification:
+     Replaced the full O(N) multi-clue mutual intersection loop with an incremental
+     O(1) verification: since earlier prefixes (0 .. count - 2) were already proven
+     consistent in prior steps, only the newly placed clue (i = count - 1) is checked
+     against intersecting clues placed earlier (j < i).
+  3. Pinned Contiguous Arrays:
+     Pinned hint_intersections_[i].data() pointers before the verification loop to
+     eliminate operator[] indirection.
+
+- Impact:
+  * try_values dropped off the profiling hotspot list entirely (<1% total time).
+  * Solver search throughput broke the 1.0M threshold, reaching ~1.10M nodes/sec.
+  * Benchmark runtime dropped from 5.88s to 5.02s.
+
+
+B. AST Memory & Assignment Dispatch Refactoring
+--------------------------------------------------------------------------------
+- Problem:
+  Profile showed runtime branch overhead inside IndexAssignStmtNode::execute (checking
+  is_tmp_) and overhead during Environment array clearing.
+
+- Solutions Implemented:
+  1. Specialized Index Assignment Nodes:
+     Split IndexAssignStmtNode into concrete TmpIndexAssignStmtNode and
+     OutputIndexAssignStmtNode, delegating at parse/resolve time to eliminate the
+     runtime is_tmp_ branch.
+  2. Sparse Dirty Index Resetting:
+     Retained sparse dirty index tracking (written_output_indices / written_tmp_indices)
+     to avoid whole-buffer zeroing (which was profiled to cause a 2.76s regression when
+     zeroing 10,000+ element buffers).
+  3. Control-Flow Raw Pointer Caching:
+     Cached raw non-owning pointers (raw_cond_, raw_body_, raw_then_, raw_else_,
+     raw_update_) inside IfStmtNode, ForStmtNode, and WhileStmtNode to eliminate
+     std::unique_ptr dereference overhead in interpreter loops.
+
+
+C. AST Constant Folding Pass
+--------------------------------------------------------------------------------
+- Problem:
+  Clue scripts frequently evaluated constant subtrees (e.g. 10 * 10, 1 + 2) repeatedly
+  inside loops and during dependency re-evaluation.
+
+- Solutions Implemented:
+  * Implemented a bottom-up fold_constants() AST optimization pass executed directly
+    after parsing (Parser::parse_program()).
+  * Evaluates compile-time constant expressions on LiteralNode operands and replaces
+    subtrees with a single LiteralNode.
+  * Retained full division-by-zero safeguards and short-circuit evaluation semantics.
+
+- Impact:
+  * Runtime dropped from 5.02s to 4.40s (~1.24M nodes/sec).
+
+
+D. AST Node Specialization at Resolve Time (Elimination of OperandSpec)
+--------------------------------------------------------------------------------
+- Problem:
+  Instruments profiling revealed that OperandSpec::get consumed 902ms of self-weight
+  because every operand evaluation had to access a padded descriptor struct and execute
+  two conditional branches (determining if the operand was Variable, Literal, or Expr).
+  Furthermore, allocating Environment slots for literal constants introduced memory loads
+  and polluted the L1 cache.
+
+- Solutions Implemented:
+  1. Resolve-Time Node Specialization:
+     Transformed ExprNode::resolve_slots into an AST-rewriting pass using
+     resolve_node(std::unique_ptr<ExprNode>, Environment&).
+     BinaryOpNode inspects child operand types bottom-up and replaces itself with
+     concrete, specialized node classes:
+       - BinaryVarVarOpNode: reads left and right slots directly from Environment
+         via raw_slots_[slot]. Zero child evaluate() virtual calls, zero operand branches.
+       - BinaryVarLitOpNode: reads the left variable slot directly and embeds the literal
+         constant as an immediate scalar member variable. Zero memory loads for literals.
+       - BinaryLitVarOpNode: embeds immediate literal on left and reads variable slot on right.
+       - BinaryVarExprOpNode / BinaryExprVarOpNode: combines direct slot lookup with
+         subexpression evaluation, maintaining short-circuit semantics for && and ||.
+       - BinaryExprLitOpNode / BinaryLitExprOpNode: combines immediate scalar constants
+         with subexpression evaluation.
+       - UnaryVarOpNode: executes unary operations directly on variable slots.
+  2. Statement-Level Immediate Caching:
+     Updated VarDeclNode, AssignStmtNode, TmpIndexAssignStmtNode, and
+     OutputIndexAssignStmtNode to cache immediate literals and variable slot IDs during
+     resolve_slots. Common assignments like `output[ternary] = 1;` execute directly
+     without virtual dispatch for the RHS constant.
+  3. Compact Environment:
+     Removed literal slots from Environment. slots_ now exclusively contains real
+     variable slots (10-15 integers), ensuring the entire variable state resides
+     in a single 64-byte L1 cache line.
+
+- Impact:
+  * Completely eliminated OperandSpec, OperandKind, and operand-type branches.
+  * Search throughput jumped from ~1.24M nodes/sec to 1.58M nodes/sec (+27%).
+  * Total benchmark runtime dropped from 4.40s down to 3.48s (~920ms reduction).
+
+
+3. VERIFICATION & INTEGRITY CHECKS
+--------------------------------------------------------------------------------
+- Compilation: Clean build with zero warnings under `clang++ -O3 -Wall -std=c++20`.
+- Correctness: Bit-for-bit exact solutions and digit count distributions verified
+  across all test puzzles:
+    * Problems/eijsink.puzzle:     456,129 nodes explored, exact match (Count: 15,22,9,8,8,9,12,4,4,13)
+    * Problems/hugo_ryder.puzzle:  Solved cleanly, exit code 0
+    * Problems/liersch_patki.puzzle: 2,714 nodes explored, exact match (Count: 10,13,8,4,8,10,4,5,1,10)
+================================================================================

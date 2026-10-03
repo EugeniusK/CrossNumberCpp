@@ -1,0 +1,1165 @@
+================================================================================
+Crossnumber Solver: Optimization & Performance Engineering Summary
+================================================================================
+
+1. Compile-Time / Parse-Time Slot Resolution (Pre-Pass)
+--------------------------------------------------------------------------------
+- Problem:
+  VariableNode::evaluate, VarDeclNode::execute, and AssignStmtNode::execute
+  previously performed runtime string comparisons and std::unordered_map lookups
+  on every variable read and write, burning 4.54s in self-time.
+
+- Solution:
+  * Implemented an AST symbol resolution pass `resolve_slots(Environment& env)`.
+  * Pre-allocated variable storage slots in Environment (std::vector<int> slots_).
+  * Resolved variable names to fixed integer slot indices (`slot_`) once during
+    AST initialization.
+  * Replaced runtime map lookups with direct array indexing: `env.get_slot_value(slot_)`
+    and `env.set_slot_value(slot_, val)`.
+
+- Code Example:
+
+  // BEFORE
+  class VariableNode : public ExprNode {
+    std::string name;
+  public:
+    VariableNode(std::string n) : name(std::move(n)) {}
+    int evaluate(Environment& env) override {
+      auto result = env.find_var(name); // Hash table lookup on std::string
+      if (result == env.var_end()) {
+        throw std::runtime_error("Undefined variable: " + name);
+      }
+      return result->second;
+    }
+  };
+
+  // AFTER
+  class VariableNode : public ExprNode {
+    std::string name;
+    int slot_; // Pre-resolved integer index
+  public:
+    VariableNode(std::string n) : name(std::move(n)), slot_(-1) {}
+
+    void resolve_slots(Environment& env) override {
+      if (slot_ < 0) {
+        slot_ = env.find_slot(name);
+        if (slot_ < 0) throw std::runtime_error("Undefined variable: " + name);
+      }
+    }
+
+    int evaluate(Environment& env) override {
+      return env.get_slot_value(slot_); // Direct array access: slots_[slot_]
+    }
+  };
+
+- Impact:
+  Reduced VariableNode::evaluate self-time from 4.54s down to ~133ms.
+
+
+2. Direct Builtin Function Dispatch (Elimination of Vector Allocations & Buffers)
+--------------------------------------------------------------------------------
+- Problem:
+  FunctionCallNode::evaluate dynamically pushed evaluated arguments into
+  a heap-allocated `std::vector<int>`, incurring heavy overhead from .clear(),
+  .emplace_back(), and dynamic reallocation (>2 seconds in Instruments).
+  Subsequently, indirect function pointer dispatch (`fn_(...)`) prevented inlining,
+  induced register spills, and triggered compiler stack canary protection.
+
+- Solution:
+  * Introduced `enum class BuiltinFn : uint8_t` (Dsum, GetNthDigit, IsPrime,
+    IsPalindrome, Pow, Isqrt, Reverse).
+  * Pre-resolved function names to `BuiltinFn builtin_id_` and cached child raw
+    expression pointers `args_[4]` at AST construction.
+  * Replaced dynamic vector buffering and function pointers with a direct
+    `switch (builtin_id_)` evaluating arguments directly as primitive scalars
+    (e.g., `dsum(args_[0]->evaluate(env))`).
+  * Removed all stack buffers from `FunctionCallNode::evaluate`, completely
+    eliminating compiler-generated `___stack_chk_guard` canary checks.
+
+- Code Example:
+
+  // BEFORE
+  class FunctionCallNode : public ExprNode {
+    std::vector<std::unique_ptr<ExprNode>> args;
+    std::vector<int> evaluated_args; // Vector allocation/reallocation
+    BuiltinFn fn_;                   // std::function<int(const std::vector<int>&)>
+  public:
+    int evaluate(Environment& env) override {
+      evaluated_args.clear();
+      for (const auto& arg : args) {
+        evaluated_args.push_back(arg->evaluate(env)); // Heap pushes
+      }
+      return fn_(evaluated_args);                     // Type-erased call
+    }
+  };
+
+  // AFTER
+  class FunctionCallNode : public ExprNode {
+    BuiltinFn builtin_id_;
+    ExprNode* args_[4]; // Pinned raw pointers, zero heap allocations
+    int arity_;
+  public:
+    int evaluate(Environment& env) override {
+      switch (builtin_id_) {
+        case BuiltinFn::Dsum:
+          return dsum(args_[0]->evaluate(env));
+        case BuiltinFn::GetNthDigit:
+          return get_nth_digit(args_[0]->evaluate(env), args_[1]->evaluate(env) - 1);
+        case BuiltinFn::IsPrime:
+          return is_prime(args_[0]->evaluate(env)) ? 1 : 0;
+        case BuiltinFn::IsPalindrome: {
+          int val = args_[0]->evaluate(env);
+          return (val == reverse_num(val)) ? 1 : 0;
+        }
+        case BuiltinFn::Pow:
+          return ipow(args_[0]->evaluate(env), args_[1]->evaluate(env));
+        case BuiltinFn::Isqrt:
+          return isqrt(args_[0]->evaluate(env));
+        case BuiltinFn::Reverse:
+          return reverse_num(args_[0]->evaluate(env));
+        default:
+          __builtin_unreachable();
+      }
+    }
+  };
+
+- Impact:
+  Eliminated heap allocations and reduced FunctionCallNode self-time from
+  over 2.24s to negligible execution overhead.
+
+
+3. Inlining Core Math & Lookup Tables (include/builtin.h)
+--------------------------------------------------------------------------------
+- Problem:
+  Math helper functions (dsum, ipow, get_nth_digit, is_prime) resided in
+  src/builtin.cpp (preventing cross-TU inlining) and were called millions of
+  times in tight candidate verification loops.
+
+- Solution:
+  * `dsum`: Created a 1,000,000-entry precomputed lookup table (`DsumLut`)
+    initialized once; inlined direct LUT access in `builtin.h`.
+  * `ipow`: Inlined fast-path LUT `kPow10` for powers of 10 (`base == 10 && exp < 10`),
+    and binary exponentiation by squaring for other bases.
+  * `is_prime`: Inlined 6k±1 primality test to fast-reject even numbers and multiples
+    of 3, reducing trial division iterations by ~66%.
+  * `get_nth_digit`: Inlined 0-indexed digit extraction using branchless total digit
+    count and power-of-10 division.
+  * `reverse_num` & `isqrt`: Inlined directly in `builtin.h`.
+
+- Code Example:
+
+  // BEFORE (src/builtin.cpp)
+  int dsum(int n) {
+    int sum = 0, num = std::abs(n);
+    while (num != 0) {
+      sum += num % 10;
+      num /= 10;
+    }
+    return sum;
+  }
+
+  int ipow(int base, int exp) {
+    int result = 1;
+    for (int i = 0; i < exp; ++i) result *= base;
+    return result;
+  }
+
+  bool is_prime(int n) {
+    if (n < 2) return false;
+    for (long long i = 2; i * i <= n; ++i) {
+      if (n % i == 0) return false;
+    }
+    return true;
+  }
+
+  // AFTER (include/builtin.h)
+  constexpr int DSUM_LUT_SIZE = 1000000;
+  struct DsumLut {
+    uint8_t table[DSUM_LUT_SIZE];
+    DsumLut(); // Precalculated once at startup: table[i] = table[i/10] + (i%10)
+  };
+  extern const DsumLut g_dsum_lut;
+
+  inline int dsum(int n) {
+    if (static_cast<unsigned>(n) < static_cast<unsigned>(DSUM_LUT_SIZE)) {
+      return g_dsum_lut.table[n]; // Instant O(1) table lookup
+    }
+    int sum = 0, num = std::abs(n);
+    while (num != 0) { sum += num % 10; num /= 10; }
+    return sum;
+  }
+
+  inline constexpr int ipow(int base, int exp) {
+    if (base == 10 && static_cast<unsigned>(exp) < 10) {
+      constexpr int kPow10[10] = {1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000};
+      return kPow10[exp]; // Direct LUT for powers of 10
+    }
+    int result = 1;
+    while (exp > 0) { // O(log exp) exponentiation by squaring
+      if (exp & 1) result *= base;
+      base *= base;
+      exp >>= 1;
+    }
+    return result;
+  }
+
+  inline bool is_prime(int n) {
+    if (n <= 3) return n > 1;
+    if ((n % 2) == 0 || (n % 3) == 0) return false; // Fast-reject 2 and 3
+    for (int i = 5; 1LL * i * i <= n; i += 6) {     // 6k ± 1 test (skips 66% of divisors)
+      if (n % i == 0 || n % (i + 2) == 0) return false;
+    }
+    return true;
+  }
+
+- Impact:
+  Core mathematical operations inline directly into caller switch branches
+  with minimal machine instructions.
+
+
+4. Enum-Based Jump Tables in BinaryOpNode & Child Pointer Pinning
+--------------------------------------------------------------------------------
+- Problem:
+  BinaryOpNode::evaluate took 9.80s (38.5% of total runtime) due to string
+  comparisons and branched evaluation logic.
+
+- Solution:
+  * Defined `enum class BinaryOp : uint8_t` with contiguous opcodes (0 to 12).
+  * Unified all operations (arithmetic, relational, equality, and short-circuiting
+    logical AND/OR) into a single direct `switch (op)`.
+  * Marked the default branch with `__builtin_unreachable()`, allowing Clang to
+    generate an indirect jump table (`ldrb` and `br`) with zero range-checking branches.
+  * Cached direct raw child pointers (`left_`, `right_`) to avoid dereferencing
+    `std::unique_ptr` wrappers on every evaluation.
+
+- Code Example:
+
+  // BEFORE
+  class BinaryOpNode : public ExprNode {
+    std::string op;
+    std::unique_ptr<ExprNode> operand1, operand2;
+  public:
+    int evaluate(Environment& env) override {
+      if (op == "&&") {
+        int left = operand1->evaluate(env);
+        if (left == 0) return 0;
+        return operand2->evaluate(env) != 0 ? 1 : 0;
+      }
+      int left = operand1->evaluate(env);
+      int right = operand2->evaluate(env);
+      if (op == "+") return left + right;
+      if (op == "-") return left - right;
+      if (op == "*") return left * right;
+      if (op == "==") return left == right ? 1 : 0;
+      // ... more string comparisons
+    }
+  };
+
+  // AFTER
+  class BinaryOpNode : public ExprNode {
+    BinaryOp op;
+    std::unique_ptr<ExprNode> operand1, operand2;
+    ExprNode* left_;
+    ExprNode* right_;
+  public:
+    int evaluate(Environment& env) override {
+      switch (op) {
+        case BinaryOp::LogicalAnd: {
+          int left = left_->evaluate(env);
+          if (left == 0) return 0;
+          return right_->evaluate(env) != 0 ? 1 : 0;
+        }
+        case BinaryOp::LogicalOr: {
+          int left = left_->evaluate(env);
+          if (left != 0) return 1;
+          return right_->evaluate(env) != 0 ? 1 : 0;
+        }
+        case BinaryOp::Add:          return left_->evaluate(env) + right_->evaluate(env);
+        case BinaryOp::Subtract:     return left_->evaluate(env) - right_->evaluate(env);
+        case BinaryOp::Multiply:     return left_->evaluate(env) * right_->evaluate(env);
+        case BinaryOp::Equal:        return left_->evaluate(env) == right_->evaluate(env) ? 1 : 0;
+        case BinaryOp::Less:         return left_->evaluate(env) <  right_->evaluate(env) ? 1 : 0;
+        // ... remaining contiguous cases
+        default:
+          __builtin_unreachable(); // Emits indirect jump table (ldrb + br)
+      }
+    }
+  };
+
+- Impact:
+  Drastically streamlined BinaryOpNode dispatch; reduced self-time from 9.80s
+  to minimal jump-table overhead.
+
+
+5. Elimination of Vector Iterator Overhead in BlockStmtNode::execute
+--------------------------------------------------------------------------------
+- Problem:
+  Standard range-based for loops over `statements_` incurred
+  `std::vector::begin()` / `end()` iterator overhead (386ms in profiling).
+
+- Solution:
+  * Ensured child nodes are non-null at AST insertion time (`add_statement`).
+  * Pinned the underlying pointer array using `const auto* raw = statements_.data()`.
+  * Implemented an integer index loop `for (size_t i = 0; i < sz; ++i) raw[i]->execute(env);`.
+
+- Code Example:
+
+  // BEFORE
+  void BlockStmtNode::execute(Environment& env) {
+    for (auto& s : statements) {
+      s->execute(env); // Incurs vector iterator overhead (.begin() / .end())
+    }
+  }
+
+  // AFTER
+  void BlockStmtNode::execute(Environment& env) {
+    const auto* raw = statements_.data();
+    const size_t sz = statements_.size();
+    for (size_t i = 0; i < sz; ++i) {
+      raw[i]->execute(env); // Emits a single post-indexed load loop in assembly
+    }
+  }
+
+- Impact:
+  Clang emits a single post-indexed load loop (`ldr x0, [x20], #0x8`, `blr x8`,
+  `subs`, `b.ne`) with zero iterator abstraction overhead.
+
+
+6. Elimination of `_platform_memcmp` & String Maps in Dependency Validation
+--------------------------------------------------------------------------------
+- Problem:
+  In `SolverOne::solve`, validating full-depth candidates (depth 48/48)
+  repeatedly looped over dependencies as `std::string`, executing linear scans
+  `dependent_hint.get_identifier() == s` (`_platform_memcmp`), string parsing
+  (`std::stoi`), and `unordered_map` string lookups on every candidate check.
+
+- Solution:
+  * Introduced `PreResolvedHintDeps` before the backtracking search loop,
+    pre-resolving dependent hint indices and destination environment slot numbers.
+  * Replaced string comparisons and map insertions with direct indexed lookups
+    (`crossnumber.hints[dep_idx]`) and slot writes (`h.set_slot_env(slot, val)`).
+  * Added early-exit termination (`break`) if any dependency check fails, skipping
+    redundant evaluations for invalid candidates.
+
+- Code Example:
+
+  // BEFORE (src/solver_one.cpp)
+  for (Hint& h : crossnumber.hints) {
+    if (h.get_if_has_dependencies()) {
+      for (std::string s : h.get_dependencies()) {
+        if (s[0] == 'a') {
+          for (Hint& dependent_hint : crossnumber.hints) {
+            // String comparisons on hot path => _platform_memcmp (106ms)
+            if (dependent_hint.get_identifier() == std::stoi(s.substr(1)) &&
+                dependent_hint.get_is_horizontal()) {
+              h.set_env(s, crossnumber.get_value(dependent_hint));
+            }
+          }
+        } else if (s[0] == 'c') {
+          h.set_env(s, crossnumber.count_digits(std::stoi(s.substr(1, 1))));
+        }
+      }
+      h.run_program_on_dependency();
+      if (h.get_output_array(crossnumber.get_value(h)) == 0) {
+        with_valid_dependencies = false;
+      }
+    }
+  }
+
+  // AFTER (src/solver_one.cpp)
+  // (Pre-resolved once outside backtracking search):
+  struct PreResolvedHintDeps {
+    size_t hint_idx;
+    std::vector<DepHintBinding> hint_bindings;   // Direct hint array index + slot
+    std::vector<DepCountBinding> count_bindings; // Digit + slot
+  };
+
+  // Hot path in solve():
+  for (const auto& prhd : resolved_deps) {
+    Hint& h = crossnumber.hints[prhd.hint_idx].get();
+    for (const auto& hb : prhd.hint_bindings) {
+      h.set_slot_env(hb.slot, crossnumber.get_value(crossnumber.hints[hb.dep_hint_idx].get()));
+    }
+    for (const auto& cb : prhd.count_bindings) {
+      h.set_slot_env(cb.slot, crossnumber.count_digits(cb.digit));
+    }
+    h.run_program_on_dependency();
+    if (h.get_output_array(crossnumber.get_value(h)) == 0) {
+      with_valid_dependencies = false;
+      break; // Early exit on first invalid dependency
+    }
+  }
+
+- Impact:
+  Completely eliminated `_platform_memcmp` (106ms) and string hashing overhead
+  from the backtracking hot path.
+
+
+7. Per-Hint Adjacency List Intersections & Incremental try_values
+--------------------------------------------------------------------------------
+- Problem:
+  Even with precomputed intersections, a flat `std::vector<HintIntersection>`
+  required linear scans over 100+ intersections on every trial check, evaluating
+  future or irrelevant clue pairs with `isect.hint_a_idx < count && isect.hint_b_idx < count`.
+
+- Solution:
+  * Replaced the flat list with per-hint adjacency lists:
+    `std::vector<std::vector<LocalIntersection>> hint_intersections_;`
+    where `hint_intersections_[i]` contains only intersections with earlier hints `j < i`.
+  * In `try_values`, verified each clue `i` against its fixed board cells and its
+    specific incoming intersections `j < i` incrementally.
+  * Conflicts trigger an immediate early exit (`return false;`), bypassing subsequent
+    clues and avoiding redundant intersection iterations entirely.
+
+- Code Example:
+
+  // BEFORE (Flat intersection vector)
+  for (const auto& isect : intersections_) {
+    if (isect.hint_a_idx < count && isect.hint_b_idx < count) {
+      // Checked all global intersections
+    }
+  }
+
+  // AFTER (Per-hint adjacency list with early exit)
+  for (int i = 0; i < count; ++i) {
+    const auto& hint = hints[i].get();
+    const int val = hint.possible_values[arr[i]];
+    const int len = hint.get_length();
+
+    // 1. Fixed cell checks with early exit
+    int idx = hint.get_y_pos() * width + hint.get_x_pos();
+    const int stride = hint.get_is_horizontal() ? 1 : width;
+    for (int d = 0; d < len; ++d) {
+      const int cell = value[idx];
+      if (cell != -2 && cell != extract_digit_fast(val, d, len)) return false;
+      idx += stride;
+    }
+
+    // 2. Incremental intersection checks (only earlier j < i) with early exit
+    for (const auto& isect : hint_intersections_[i]) {
+      const auto& other_hint = hints[isect.other_hint_idx].get();
+      const int val_other = other_hint.possible_values[arr[isect.other_hint_idx]];
+      if (extract_digit_fast(val, isect.pos_in_self, len) !=
+          extract_digit_fast(val_other, isect.pos_in_other, other_hint.get_length())) {
+        return false;
+      }
+    }
+  }
+
+- Impact:
+  Eliminated global intersection scans and enabled instant early exits on candidate
+  mismatches, pushing solver throughput from ~850k to **~920k nodes/sec**.
+
+
+8. Elimination of String Hash Maps in Assignments & Dependency Cartesian Evaluation
+--------------------------------------------------------------------------------
+- Problem:
+  Instruments trace showed 346ms in `Environment::set_var`, 299ms in `__hash_iterator`,
+  and 84ms in `_platform_memcmp`. Variable assignment and dependency injection during
+  shake passes (`digit_shake_with_dependencies`) performed millions of string map lookups.
+
+- Solution:
+  * Updated `AssignStmtNode::resolve_slots` and `execute` to resolve slots once and
+    write directly via `env.set_slot_value(slot_, val)` without touching hash maps.
+  * In `digit_shake_with_dependencies`, pre-resolved all dependency slot indices (`dep_slots`)
+    once before the Cartesian product loop, replacing `h.set_env(dependencies[j], val)`
+    with `h.set_slot_env(dep_slots[j], val)`.
+  * Updated `Hint::set_env` to use cached slots when available.
+
+- Impact:
+  Eliminated over 3.2 million string hash map lookups and all remaining `_platform_memcmp`
+  overhead during dependency domain shaking.
+
+
+9. Flattened Adjacency Intersections & Elimination of Vector Iterators
+--------------------------------------------------------------------------------
+- Problem:
+  Instruments trace showed 177ms spent in vector iterator overhead (110ms in
+  `std::__wrap_iter::operator++` and 67ms in `std::vector::begin()`) when traversing
+  `hint_intersections_[i]` inside `try_values`.
+
+- Solution:
+  * Replaced `std::vector<std::vector<LocalIntersection>>` with fixed-capacity
+    in-place structs:
+    ```cpp
+    struct HintIntersections {
+      LocalIntersection items[12];
+      uint8_t count = 0;
+    };
+    std::vector<HintIntersections> hint_intersections_;
+    ```
+  * In `try_values`, replaced range-based for loops with direct indexed loop:
+    `for (uint8_t k = 0; k < isects.count; ++k)`.
+
+- Impact:
+  Eliminated all vector iterator instantiations, heap dereferences, and bounds checking
+  overhead on the hottest traversal path.
+
+
+10. Precomputed Digits in Candidate Values (Eliminating extract_digit_fast)
+--------------------------------------------------------------------------------
+- Problem:
+  Dynamic division and modulo operations in `extract_digit_fast` burned ~220ms
+  across the search tree in `try_values`.
+
+- Solution:
+  * Defined `struct CandidateValue { int value; std::array<uint8_t, 8> digits; };`.
+  * Precomputed all candidate digits once during initialization and domain shaking.
+  * In `try_values`, replaced all runtime powers-of-10 divisions with direct array
+    lookups: `cand.digits[d]` and `cand.digits[isect.pos_in_self]`.
+
+- Impact:
+  Completely eliminated runtime division and modulo arithmetic from `try_values`.
+
+
+11. Inlined Direct Array Indexing in Environment & IndexAssignStmtNode
+--------------------------------------------------------------------------------
+- Problem:
+  `set_output_array` and `get_output_array` took ~126ms due to out-of-line function
+  call overhead and exception-branching bounds checks.
+
+- Solution:
+  * Inlined `set_output_array`, `get_output_array`, `set_tmp_array`, and `get_tmp_array`
+    directly into `include/ast.h` using `[[likely]]` fast paths.
+  * Writes to output arrays inside `IndexAssignStmtNode::execute` now inline to direct
+    memory writes without function call overhead.
+
+- Impact:
+  Eliminated out-of-line function calls and exception checks for output array writes.
+
+
+12. Pinned Contiguous Arrays in try_values & Direct std::span Call Site
+--------------------------------------------------------------------------------
+- Problem:
+  Instruments trace showed 86ms spent in `vector<HintIntersections>::operator[]`
+  inside `try_values`, and 795ms total weight in `try_values(vector)` wrapper due to
+  constructing an ephemeral span on every node evaluation.
+
+- Solution:
+  * In `try_values`, pinned contiguous raw pointers before the loop:
+    `const auto* raw_hint_isects = hint_intersections_.data();`
+    `const auto* raw_hints = hints.data();`
+    `const int* raw_arr = arr.data();`
+    `const int* raw_value = value.data();`
+  * Before the inner loop, pinned the intersection items pointer:
+    `const auto* isects = hint_isects.data();` and iterated directly by index `isects[k]`.
+  * Updated `SolverOne::solve` to initialize `guesses_span` once and pass it directly
+    to `crossnumber.try_values(guesses_span, number_guesses)`, completely bypassing the
+    vector forwarding wrapper.
+
+- Impact:
+  Eliminated all `vector::operator[]` overhead and removed the 795ms forwarding wrapper
+  from the backtracking search path.
+
+
+13. Raw Pointer Caching in Control-Flow and AST Statement Nodes
+--------------------------------------------------------------------------------
+- Problem:
+  Instruments profile showed ~244ms spent in `std::unique_ptr::operator->`,
+  `std::unique_ptr::operator bool`, and `std::vector::data()` inside `IfStmtNode`,
+  `ForStmtNode`, `WhileStmtNode`, and `BlockStmtNode`.
+
+- Solution:
+  * Added cached raw pointers (`StmtNode* raw_body_`, `ExprNode* raw_cond_`,
+    `StmtNode* raw_then_`, `StmtNode* raw_else_`, `StmtNode* raw_init_`, `StmtNode* raw_update_`,
+    `ExprNode* raw_expr_`) initialized during node construction and post-parse `resolve_slots`.
+  * In `BlockStmtNode`, cached `StmtNode* const* raw_statements_` and `statements_size_`
+    to avoid calling `vector::data()` and `vector::size()` on every loop iteration.
+  * In `execute()`, replaced all smart-pointer dereferences with direct raw pointer invocations:
+    `raw_body_->execute(env)`, `raw_cond_->evaluate(env)`, etc.
+
+- Impact:
+  Completely eliminated smart pointer member overhead and vector accessors in loop bodies.
+
+
+14. Concrete AST Node Specialization for Index Assignments
+--------------------------------------------------------------------------------
+- Problem:
+  `IndexAssignStmtNode::execute` performed a runtime condition `if (is_tmp_)` on every
+  array write in clue scripts.
+
+- Solution:
+  * Split index assignment into two concrete AST nodes during parsing:
+    `TmpIndexAssignStmtNode` and `OutputIndexAssignStmtNode`.
+  * `OutputIndexAssignStmtNode::execute` calls `env.set_output_array(...)` directly without
+    branching, allowing the compiler to inline array assignment directly into the node.
+  * Maintained `IndexAssignStmtNode` as a lightweight wrapper delegating to the specialized
+    nodes for backwards compatibility.
+
+- Impact:
+  Eliminated all runtime array-type branching in clue AST execution.
+
+
+15. Startup Board Candidate Pruning & Incremental O(1) try_values
+--------------------------------------------------------------------------------
+- Problem:
+  Instruments line-by-line profiling on `try_values` revealed:
+  1. Re-checking all `count` hints on every node spent 140ms in outer loop and `get_length()`.
+  2. Testing every candidate against fixed board cells (`raw_value[idx]`) consumed 187ms,
+     even though the board is static throughout the entire solve.
+  3. Re-verifying mutual intersections of already-checked clues spent 190ms.
+
+- Solution:
+  * In `ArrayCrossNumber::init_intersections`, pruned candidates against fixed board cells
+    once at startup using `is_possible_value(val, h)`, guaranteeing every candidate in
+    `candidates` is statically valid against the board.
+  * Completely eliminated the 187ms fixed board cell verification loop from `try_values`.
+  * Implemented incremental candidate validation in `try_values`: since prefixes `0 .. count - 2`
+    were already verified in earlier backtracking steps, only the newly placed / incremented
+    clue `i = count - 1` is checked against earlier intersecting clues `j < i`.
+
+- Impact:
+  * Replaced an $O(N)$ multi-clue loop with an $O(1)$ single-clue verification step.
+  * Reduced `try_values` overhead by over 95%.
+  * Solver search throughput broke the 1.0M threshold, reaching up to **~1.10M nodes/sec**.
+  * Total benchmark runtime dropped from 5.88s down to **5.02s** (~0.86s reduction).
+
+
+16. AST Constant Folding & Operand Specialization
+--------------------------------------------------------------------------------
+- Problem:
+  Instruments profiling revealed that after `try_values` optimizations, AST evaluation
+  overhead accounted for 83% of total execution time (led by `BinaryOpNode::evaluate` at
+  2.07s and `Environment::get_slot_value` at 428ms). Every binary operation incurred:
+  1. Two virtual `evaluate()` calls per node (e.g., `left_->evaluate(env)`).
+  2. Memory lookups for trivial constants and variable slot indirection.
+  3. Redundant arithmetic evaluation of constant expressions at runtime.
+
+- Solution:
+  1. AST Constant Folding Pass:
+     - Implemented a bottom-up `fold_constants()` optimization pass across expressions and statements.
+     - Automatically evaluates any `BinaryOpNode` (or `UnaryOpNode`) whose operands fold down
+       to `LiteralNode` instances at parse time, replacing the subtree with a single `LiteralNode`.
+     - Preserves division-by-zero safeguards and short-circuit evaluation semantics.
+  2. Direct Operand Fast-Paths in `BinaryOpNode`:
+     - Introduced `OperandSpec` and `OperandKind` (`Variable`, `Literal`, `General`).
+     - At post-parse slot resolution time (`resolve_slots`), cached whether `left_` or `right_`
+       are `VariableNode` (storing the direct slot ID) or `LiteralNode` (storing the constant value).
+     - In `BinaryOpNode::evaluate`, fetches variable values directly via `env.get_slot_value(slot)`
+       or returns immediate literal constants directly, completely bypassing virtual `evaluate()` calls.
+
+- Impact:
+  - Eliminated virtual dispatch overhead on all variable-variable, variable-literal, and literal-literal operations.
+  - Search throughput increased from ~1.10M nodes/sec up to **1.24M nodes/sec**.
+  - Total benchmark runtime dropped from 5.12s down to **4.40s - 4.45s** (~700ms / ~14% reduction).
+
+
+17. AST Node Specialization at Resolve Time
+--------------------------------------------------------------------------------
+- Problem:
+  Profiling revealed that `OperandSpec::get` consumed 902ms of self-weight because every
+  operand evaluation had to inspect descriptor structs and execute conditional branches
+  determining whether the operand was a Variable, Literal, or Expression. Loading literals
+  from Environment slots also added memory load overhead and polluted the slot cache line.
+
+- Solution:
+  * Implemented AST node specialization at slot resolution time (`resolve_slots`):
+    - When child operands are resolved, concrete specialized AST node variants are instantiated:
+      1. `BinaryVarVarOpNode`: reads left and right slots directly from `Environment` without
+         descriptor lookups or runtime operand checks.
+      2. `BinaryVarLitOpNode`: reads the variable slot directly and embeds the literal constant
+         as an immediate member value, eliminating memory lookups for literals.
+      3. `BinaryLitVarOpNode`: embeds the immediate literal on the left and reads the variable slot.
+      4. `BinaryVarExprOpNode` / `BinaryExprVarOpNode`: combines a direct slot read with child evaluation.
+      5. `BinaryExprLitOpNode` / `BinaryLitExprOpNode`: combines child evaluation with immediate literals.
+      6. `UnaryVarOpNode`: performs unary negation/not directly on a slot.
+  * Completely eliminated `OperandSpec`, `OperandKind`, and descriptor branches from the evaluation path.
+  * Added literal caching to assignment statement nodes (`VarDeclNode`, `AssignStmtNode`,
+    `TmpIndexAssignStmtNode`, `OutputIndexAssignStmtNode`) to bypass expression evaluation for constants.
+  * Preserved exact division-by-zero safeguards and short-circuit evaluation semantics.
+
+- Impact:
+  * Eliminated runtime operand dispatch overhead across all binary and unary operations.
+  * Search throughput increased from ~1.24M nodes/sec up to **1.58M nodes/sec**.
+  * Total benchmark runtime dropped from 4.40s down to **3.48s** (~920ms / ~21% reduction).
+
+
+18. Static Operator Specialization via Templates (eval_binary_op_static<Op>)
+--------------------------------------------------------------------------------
+- Problem:
+  Even after operand specialization, binary operation evaluation routed through
+  a dynamic runtime switch statement in `eval_binary_op`. Instruments profiling
+  identified `eval_binary_op` as consuming 535ms of self-weight on the 10x benchmark.
+  The runtime switch prevented the compiler from inlining operator-specific CPU
+  instructions and caused branch predictor pressure.
+
+- Solution:
+  * Converted runtime operator evaluation into compile-time template instantiation:
+    `template <BinaryOp Op> inline int eval_binary_op_static(int left, int right) noexcept`.
+  * Templated all binary AST nodes directly on `BinaryOp Op`:
+    `BinaryVarVarOpNode<Op>`, `BinaryVarLitOpNode<Op>`, `BinaryLitVarOpNode<Op>`,
+    `BinaryVarExprOpNode<Op>`, `BinaryExprVarOpNode<Op>`, `BinaryExprLitOpNode<Op>`,
+    `BinaryLitExprOpNode<Op>`.
+  * In `BinaryOpNode::resolve_slots`, used a factory dispatch switch on `op` to
+    instantiate the concrete templated node type once during AST initialization.
+  * Inlined operations like addition, multiplication, and comparisons directly into
+    each specialized node's `evaluate(Environment& env)` method with zero runtime branching.
+  * Removed the dead `IndexAssignStmtNode` wrapper class.
+
+- Code Example:
+
+  // BEFORE (Runtime operator dispatch)
+  int eval_binary_op(BinaryOp op, int left, int right) {
+    switch (op) {
+      case BinaryOp::Add:      return left + right;
+      case BinaryOp::Subtract: return left - right;
+      case BinaryOp::Multiply: return left * right;
+      case BinaryOp::Equal:    return left == right ? 1 : 0;
+      case BinaryOp::Less:     return left < right ? 1 : 0;
+      // ... runtime switch on every evaluation
+    }
+  }
+
+  // AFTER (Compile-time operator specialization)
+  template <BinaryOp Op>
+  inline int eval_binary_op_static(int left, int right) noexcept {
+    if constexpr (Op == BinaryOp::Add)      return left + right;
+    if constexpr (Op == BinaryOp::Subtract) return left - right;
+    if constexpr (Op == BinaryOp::Multiply) return left * right;
+    if constexpr (Op == BinaryOp::Equal)    return left == right ? 1 : 0;
+    if constexpr (Op == BinaryOp::Less)     return left < right ? 1 : 0;
+    // ... all operations resolved at compile time
+  }
+
+  template <BinaryOp Op>
+  class BinaryVarVarOpNode : public ExprNode {
+    int left_slot_;
+    int right_slot_;
+  public:
+    int evaluate(Environment& env) override {
+      return eval_binary_op_static<Op>(
+          env.get_slot_value(left_slot_), env.get_slot_value(right_slot_));
+    }
+  };
+
+- Impact:
+  * `eval_binary_op` (535ms self-weight) completely vanished from the Instruments hotspot list.
+  * Total benchmark runtime dropped from 3.48s down to **3.15s**.
+  * Search throughput increased from ~1.58M nodes/sec to **~1.79M nodes/sec**.
+
+
+19. Single-Statement Block Unboxing & Block Flattening
+--------------------------------------------------------------------------------
+- Problem:
+  Instruments traces revealed that `BlockStmtNode::execute` consumed 504ms self-weight
+  (and 2.59s total weight, representing 82.1% of entire program runtime). Every `{ ... }`
+  block in clue scripts was parsed as a `BlockStmtNode`.
+  For example, in `if (cond) { output[i] = 1; }`, the then-branch pointed to a
+  `BlockStmtNode` containing exactly 1 child statement (`OutputIndexAssignStmtNode`).
+  Executing this required:
+    1. Virtual call: `IfStmtNode::execute`
+    2. Virtual call: `raw_cond_->evaluate(env)`
+    3. Virtual call: `BlockStmtNode::execute`
+    4. Loop overhead: `for (size_t i = 0; i < 1; ++i)`
+    5. Virtual call: `OutputIndexAssignStmtNode::execute`
+  This incurred 4 virtual calls and loop setup for a single array write.
+
+- Solution:
+  * Updated the AST statement resolution contract:
+    `virtual std::unique_ptr<StmtNode> StmtNode::resolve_slots(std::unique_ptr<StmtNode> self, Environment& env)`.
+  * Added AST rewrite helper `resolve_stmt(std::unique_ptr<StmtNode> stmt, Environment& env)`.
+  * In `BlockStmtNode::resolve_slots`:
+    1. Flattening: Recursively flattens any child statements that are themselves `BlockStmtNode`
+       instances directly into the parent block's statement list, eliminating nested loops.
+    2. Unboxing: If after resolution the block contains exactly one child statement
+       (`owned_statements_.size() == 1`), the block unboxes itself and returns the inner
+       `std::unique_ptr<StmtNode>` directly to the parent node.
+  * In `IfStmtNode`, `ForStmtNode`, and `WhileStmtNode`, resolved all branch and body
+    pointers using `resolve_stmt`, so unboxed single statements are held and called directly.
+  * Updated `cached_program` in `Hint` to `std::unique_ptr<StmtNode>`, allowing root-level
+    clue scripts that unbox down to a single statement or specialized loop to be cached
+    directly without an outer `BlockStmtNode` wrapper.
+
+- Code Example:
+
+  // BEFORE (src/ast.cpp)
+  void BlockStmtNode::resolve_slots(Environment& env) {
+    for (auto& stmt : owned_statements_) {
+      if (stmt) stmt->resolve_slots(env);
+    }
+  }
+
+  // AFTER (src/ast.cpp)
+  std::unique_ptr<StmtNode> BlockStmtNode::resolve_slots(
+      std::unique_ptr<StmtNode> self, Environment& env) {
+    std::vector<std::unique_ptr<StmtNode>> new_statements;
+    new_statements.reserve(owned_statements_.size());
+    for (auto& stmt : owned_statements_) {
+      if (!stmt) continue;
+      auto resolved = resolve_stmt(std::move(stmt), env);
+      if (!resolved) continue;
+      if (auto* child_block = dynamic_cast<BlockStmtNode*>(resolved.get())) {
+        for (auto& child_stmt : child_block->get_owned_statements()) {
+          if (child_stmt) new_statements.push_back(std::move(child_stmt));
+        }
+      } else {
+        new_statements.push_back(std::move(resolved));
+      }
+    }
+    owned_statements_ = std::move(new_statements);
+
+    // Unbox single-statement blocks
+    if (owned_statements_.size() == 1) {
+      return std::move(owned_statements_[0]);
+    }
+    // ... update cached raw pointers
+    return self;
+  }
+
+- Impact:
+  * BlockStmtNode::execute self-weight dropped from 504.00 ms down to 205.00 ms (-59.3% self-overhead).
+  * BlockStmtNode::execute total weight dropped from 2.59 s down to 1.14 s (-56.0%).
+  * Eliminates unnecessary `BlockStmtNode` virtual dispatch and loop setup across all
+    single-statement control flow branches and clue script bodies.
+
+
+20. Canonical For-Loop Specialization (ForCountStmtNode)
+--------------------------------------------------------------------------------
+- Problem:
+  Instruments traces identified `ForStmtNode::execute` with 178ms self-weight and
+  2.07s total weight (65.7% of total runtime). Clue scripts heavily execute canonical
+  integer counting loops of the form:
+    `for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i = i + 1) { ... }`
+  In standard `ForStmtNode::execute`, each loop iteration executed 3 virtual dispatches:
+    1. `raw_cond_->evaluate(env)`
+    2. `raw_body_->execute(env)`
+    3. `raw_update_->execute(env)`
+  Across large candidate spaces (up to 10,000 iterations), millions of virtual function
+  calls were made solely to increment and test loop counters.
+
+- Solution:
+  * In `ForStmtNode::resolve_slots`, implemented pattern detection for canonical counting loops:
+    1. Counter initialization: `VarDeclNode` or `AssignStmtNode` setting `var_slot` to an integer literal `start_val`.
+    2. Step update: `AssignStmtNode` matching `var_slot = var_slot + 1` (`BinaryOp::Add` with literal 1).
+    3. Loop condition: `var_slot < limit_slot` (or literal limit `var_slot < limit_lit` / `var_slot <= limit_lit`).
+  * When matched, `ForStmtNode` replaces itself with specialized node classes:
+    - `ForCountVarLimitStmtNode`: Loop upper bound is read from an `Environment` slot.
+    - `ForCountLitLimitStmtNode`: Loop upper bound is an immediate scalar constant.
+  * In `ForCount*StmtNode::execute`, the loop runs as a native C++ loop:
+    - Fetches the limit once outside the loop.
+    - Updates `env.set_slot_value(var_slot_, i)` and invokes `raw_body_->execute(env)`.
+    - Eliminates condition evaluation and update statement virtual calls completely.
+    - Sets `var_slot_` to its terminal value on loop exit to maintain exact language semantics.
+
+- Code Example:
+
+  // BEFORE (src/ast.cpp - 3 virtual calls per iteration)
+  void ForStmtNode::execute(Environment& env) {
+    if (raw_init_) raw_init_->execute(env);
+    while (raw_cond_->evaluate(env) != 0) {
+      raw_body_->execute(env);
+      raw_update_->execute(env);
+    }
+  }
+
+  // AFTER (Specialized native counting loop - 1 virtual call per iteration)
+  void ForCountVarLimitStmtNode::execute(Environment& env) {
+    int limit = env.get_slot_value(limit_slot_);
+    int i = start_val_;
+    for (; i < limit; ++i) {
+      env.set_slot_value(var_slot_, i);
+      raw_body_->execute(env);
+    }
+    env.set_slot_value(var_slot_, i);
+  }
+
+  void ForCountLitLimitStmtNode::execute(Environment& env) {
+    int i = start_val_;
+    for (; i < limit_val_; ++i) {
+      env.set_slot_value(var_slot_, i);
+      raw_body_->execute(env);
+    }
+    env.set_slot_value(var_slot_, i);
+  }
+
+- Impact:
+  * Eliminates 2 out of 3 virtual function dispatches per iteration on hot loops.
+  * Loop condition testing and counter increments execute at native CPU speed.
+  * Generic `ForStmtNode::execute` (178.00 ms self, 2.07 s total) was replaced by specialized
+    `ForCountVarLimitStmtNode::execute` (108.00 ms self, 1.57 s total), dropping off the unspecialized loop hotspot list.
+  * Reduced `AssignStmtNode::execute` self-weight from 308.00 ms down to 131.00 ms (-57.5%) because loop counter
+    updates (`i = i + 1`) are executed as native C++ increments rather than AST statement dispatches.
+  * Search throughput jumped from ~1.79M nodes/sec to **~2.28M – 2.30M nodes/sec** (+28% throughput increase).
+
+
+21. IfStmtNode Devirtualization & ForCount-If Loop Fusion
+--------------------------------------------------------------------------------
+- Problem:
+  In previous profiling traces, `IfStmtNode::execute` was the #1 hotspot, consuming
+  427.00 ms of self-weight (929.00 ms total weight, 36.9% of program execution).
+  Investigation showed:
+  1. Over 95% of `if` statements in clue scripts had no `else` branch, yet on every
+     false condition (which occurred millions of times in loops), execution branched
+     to `else if (raw_else_)`, checking against null before returning.
+  2. The majority of `if` executions occurred as the bodies of canonical integer
+     counting loops (`for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i = i + 1) if (is_prime(i)) ...`).
+     Every iteration dispatched through `raw_body_->execute(env)` to `IfStmtNode::execute`,
+     which in turn dispatched to `cond->evaluate(env)`.
+
+- Solution:
+  * Dedicated `IfThenStmtNode`:
+    Created a specialized node for `if` statements without `else` branches.
+    Instantiated directly in `Parser::parse_if_stmt` and transformed during
+    `IfStmtNode::resolve_slots` when `else_branch == nullptr`.
+    Calls `raw_then_->execute(env)` directly via cached raw pointer with `[[likely]]`,
+    completely eliminating the `raw_else_` branch check on false evaluations.
+  * For-Count + If-Then Loop Fusion (`ForCountIfVarLimitStmtNode` & `ForCountIfLitLimitStmtNode`):
+    When a canonical counting loop has an `IfThenStmtNode` body, fused loop execution directly:
+    ```cpp
+    for (; i < limit; ++i) {
+      env.set_slot_value(var_slot_, i);
+      if (raw_cond_->evaluate(env) != 0) {
+        raw_then_->execute(env);
+      }
+    }
+    ```
+    Completely eliminates the intermediate `raw_body_->execute(env)` virtual call per loop
+    iteration. On false evaluations (e.g. non-prime numbers, which comprise ~88% of iterations),
+    the loop advances with zero statement virtual function calls.
+
+- Impact:
+  * `IfStmtNode::execute` (427.00 ms self-weight, 929.00 ms total) was completely eliminated.
+  * Specialized `IfThenStmtNode::execute` self-weight plummeted to **117.00 ms** (-310 ms / -72.6% self-weight reduction!).
+  * Total benchmark runtime dropped from 2.52s down to **2.28s** (-240ms / -9.5% reduction).
+  * `FunctionCallNode::evaluate` is now the new #1 hotspot at 274.00 ms self-weight.
+
+
+22. FunctionCallNode Argument Caching & Builtin Specialization (FunctionCallVar1Node)
+--------------------------------------------------------------------------------
+- Problem:
+  After IfStmt devirtualization, `FunctionCallNode::evaluate` became the #1 hotspot,
+  consuming 274.00 ms of self-weight (367.00 ms total weight, 16.1% of program time).
+  Builtins like `is_prime(i)`, `dsum(i)`, and `is_palindrome(i)` evaluated their arguments
+  via virtual function dispatch (`args_[0]->evaluate(env)`). When the argument was a
+  `VariableNode`, this dispatched polymorphically just to read `env.get_slot_value(slot)`.
+
+- Solution:
+  1. Argument Slot & Literal Caching:
+     - In `FunctionCallNode::resolve_slots`, pre-resolved argument slots (`arg_slots_[4]`),
+       literals (`arg_is_lit_[4]`), and constant values (`arg_lit_vals_[4]`).
+     - Added inlined `get_arg(i, env)` to read slot values and literals directly, bypassing
+       virtual calls for all primitive variable and constant arguments.
+  2. Single-Argument Builtin Specialization (`FunctionCallVar1Node<Fn>`):
+     - For high-frequency single-argument functions called on variables (`is_prime(i)`,
+       `dsum(i)`, `is_palindrome(i)`, `isqrt(i)`, `reverse(i)`), specialized the call
+       into a compact 16-byte template node `FunctionCallVar1Node<Fn>`.
+     - In `evaluate(Environment& env)`, reads `env.get_slot_value(slot_)` and executes
+       the inlined builtin directly with **zero argument virtual calls** and **zero switch branches**.
+  3. Builtin Constant Folding:
+     - Pre-evaluates builtins at compile/parse time when all arguments fold to `LiteralNode`
+       instances, turning constant calls like `ipow(10, 2)` directly into `LiteralNode(100)`.
+
+- Code Example:
+
+  // BEFORE (Virtual argument evaluation & runtime switch)
+  int FunctionCallNode::evaluate(Environment& env) {
+    switch (builtin_id_) {
+      case BuiltinFn::IsPrime: return is_prime(args_[0]->evaluate(env)) ? 1 : 0;
+      // ...
+    }
+  }
+
+  // AFTER (Specialized direct slot template - zero argument virtual dispatch)
+  template <BuiltinFn Fn>
+  class FunctionCallVar1Node : public ExprNode {
+    int slot_;
+  public:
+    explicit FunctionCallVar1Node(int slot) : slot_(slot) {}
+    int evaluate(Environment& env) override {
+      int val = env.get_slot_value(slot_);
+      if constexpr (Fn == BuiltinFn::IsPrime) return is_prime(val) ? 1 : 0;
+      if constexpr (Fn == BuiltinFn::Dsum)    return dsum(val);
+      // ...
+    }
+  };
+
+- Impact:
+  * `FunctionCallNode::evaluate` completely vanished from the Instruments hotspot list (<26 ms, down from 274.00 ms).
+  * `ForCountIfVarLimitStmtNode::execute` total weight dropped from 499.00 ms down to **262.00 ms** (-47.5%).
+  * Total benchmark runtime dropped from 2.28s down to **2.06s** (-220ms / -9.6%).
+  * Search throughput surged from ~2.53M nodes/sec to **~2.80M – 2.83M nodes/sec**.
+
+
+23. WhileStmtNode Canonical Loop Specialization & Small Block Unrolling
+--------------------------------------------------------------------------------
+- Problem:
+  Instruments traces identified `WhileStmtNode::execute` with 156.00 ms of self-weight
+  (599.00 ms total weight, 29.0% of program runtime) and `BlockStmtNode::execute` with
+  183.00 ms self-weight (1.07s total weight, 52.0% of program runtime).
+  Investigation revealed:
+  1. Every `while` iteration dispatched through `raw_cond_->evaluate(env)` and `raw_body_->execute(env)`.
+     Common loops tested trivial conditions (e.g. `while (stop == 0)`, `while (temp > 0)`,
+     `while (t < OUTPUT_ARRAY_LENGTH)`, `while (k * k <= i)`, `while (n % p == 0)`).
+     For `while (k * k <= i)` in clue `d37` (which executes over 600,000 times during domain shaking
+     and dependency candidate checks), each condition test incurred two nested virtual calls
+     (`LessEqual` and `Multiply`).
+  2. The bodies of these while loops were almost exclusively blocks of 2 statements
+     (e.g. `IfThenStmtNode` followed by `AssignStmtNode` counter update).
+     Executing `raw_body_->execute(env)` dispatched to `BlockStmtNode::execute`, which ran
+     a loop counting to 2, adding loop setup and indexed pointer dereferences on every iteration.
+
+- Solution:
+  1. Concrete Specialized While Nodes:
+     Created dedicated template node classes inheriting from `WhileBaseStmtNode`:
+     - `WhileVarLitCondStmtNode<Op>`: for `slot OP literal` (e.g. `while (stop == 0)`, `while (temp > 0)`).
+       Directly evaluates `eval_binary_op_static<Op>(env.get_slot_value(slot_), lit_val_)` at native speed.
+     - `WhileVarVarCondStmtNode<Op>`: for `slot1 OP slot2` (e.g. `while (t < OUTPUT_ARRAY_LENGTH)`).
+       Directly compares two slots without virtual dispatch.
+     - `WhileLitVarCondStmtNode<Op>`: for `literal OP slot`.
+     - `WhileVarSquareVarLimitStmtNode<Op>`: specialized for `var * var OP limit_slot` (e.g. `while (k * k <= i)`
+       and `while (i * i < OUTPUT_ARRAY_LENGTH)`).
+       Directly computes `k * k <= limit` using native integer multiplication and comparison,
+       eliminating both the condition and the inner multiplication virtual calls.
+     - `WhileVarSquareLitLimitStmtNode<Op>`: for `var * var OP literal`.
+     - `WhileVarCondStmtNode`: for `while (slot)`.
+     - `WhileVarModVarZeroStmtNode`: for `while (num % div == 0)`.
+  2. Direct 2-Statement Body Execution:
+     In `WhileBaseStmtNode` (and generic `WhileStmtNode`), cached direct pointers `raw_stmt0_`
+     and `raw_stmt1_` when `body_` is a `BlockStmtNode` with `statements_size_ == 2`.
+     Directly executes `raw_stmt0_->execute(env); raw_stmt1_->execute(env);`, completely bypassing
+     the virtual call to `BlockStmtNode::execute` and its loop counter overhead.
+  3. Small Block Unrolling in BlockStmtNode:
+     In `BlockStmtNode::execute`, unrolled execution for blocks with 2, 3, or 4 statements directly
+     to eliminate iteration counter checks on all multi-statement blocks.
+
+- Code Example:
+
+  // BEFORE (src/ast.cpp - 2 virtual calls per iteration + block loop)
+  void WhileStmtNode::execute(Environment& env) {
+    while (raw_cond_->evaluate(env) != 0) {
+      raw_body_->execute(env); // Virtual dispatch to BlockStmtNode loop
+    }
+  }
+
+  // AFTER (Specialized direct condition + direct statement pair execution)
+  template <BinaryOp Op>
+  class WhileVarSquareVarLimitStmtNode : public WhileBaseStmtNode {
+    int var_slot_;
+    int limit_slot_;
+  public:
+    void execute(Environment& env) override {
+      while (eval_binary_op_static<Op>(
+          env.get_slot_value(var_slot_) * env.get_slot_value(var_slot_),
+          env.get_slot_value(limit_slot_)) != 0) {
+        execute_body(env); // Calls raw_stmt0_ and raw_stmt1_ directly if 2 statements!
+      }
+    }
+  };
+
+- Impact:
+  * Generic `WhileStmtNode::execute` (156.00 ms self, 599.00 ms total) completely vanished from the profile.
+  * Specialized `WhileVarSquareVarLimitStmtNode<LessEqual>::execute` took only 81.00 ms self (total while loop overhead dropped from 599 ms to 395 ms, a -34.0% reduction).
+  * Direct 2-statement dispatch and small-block unrolling dropped `BlockStmtNode::execute` self-weight from 183.00 ms down to 127.00 ms (-56 ms / -30.6% self reduction) and total weight from 1.07s down to 850.00 ms (-20.6%).
+  * `AssignStmtNode::execute` self-weight dropped from 139.00 ms down to 104.00 ms (-25.2%).
+  * Instruments Measured Runtime: **1.83s** (down from 2.06s, a 230ms / 11.2% reduction; down from 27.7s).
+  * Peak throughput: surged to **~3.33M – 3.34M nodes/sec**.
+
+
+24. Builtin-Variable Binary Comparison Specialization (FnCall1VarVarOpNode & FnCall1VarLitOpNode)
+--------------------------------------------------------------------------------
+- Problem:
+  After WhileStmt specialization, `BinaryExprVarOpNode<(BinaryOp)5>::evaluate` became the #1
+  hotspot at 147.00 ms self-weight (206.00 ms total weight, 11.3% of program runtime).
+  Analysis showed that clue scripts frequently evaluate expressions like:
+    `if (dsum(i) == c3)` (clue a17)
+    `if (is_prime(i) && dsum(i) == c4)` (clue d24)
+  Both `a17` and `d24` have dynamic clue dependencies (`c3` and `c4`) and execute counting
+  loops over 10,000 iterations for every candidate solution during backtracking and domain shaking.
+  Testing `dsum(i) == c3` incurred:
+    1. Virtual dispatch: `BinaryExprVarOpNode<Equal>::evaluate`
+    2. Virtual dispatch: `raw_left_->evaluate` (calling `FunctionCallVar1Node<Dsum>::evaluate`)
+    3. Reading slot `i` and computing `dsum(val)`
+    4. Reading slot `c3` and testing equality
+  Every candidate evaluation was incurring millions of unnecessary virtual calls.
+
+- Solution:
+  * Added introspection method `virtual bool is_fn_call_var1(BuiltinFn& fn, int& slot)` to `ExprNode`.
+  * In `BinaryOpNode::resolve_slots`, if `left_` is a `FunctionCallVar1Node`:
+    - If `right_` is a variable slot: specializes to `FnCall1VarVarOpNode<Fn, Op>(fn_slot, right_slot)`.
+    - If `right_` is an immediate literal: specializes to `FnCall1VarLitOpNode<Fn, Op>(fn_slot, lit_val)`.
+  * `FnCall1VarVarOpNode::evaluate` reads both variable slots, invokes the builtin function directly,
+    and performs the binary comparison in native C++ with **zero argument virtual calls** and **zero switch branches**.
+
+- Code Example:
+
+  // BEFORE (Two virtual calls per evaluation)
+  int BinaryExprVarOpNode<Op>::evaluate(Environment& env) {
+    return eval_binary_op_static<Op>(raw_left_->evaluate(env), env.get_slot_value(right_slot_));
+  }
+
+  // AFTER (Specialized direct slot template - zero intermediate virtual calls)
+  template <BuiltinFn Fn, BinaryOp Op>
+  class FnCall1VarVarOpNode : public ExprNode {
+    int fn_slot_;
+    int right_slot_;
+  public:
+    int evaluate(Environment& env) override {
+      int val = env.get_slot_value(fn_slot_);
+      int fn_res = 0;
+      if constexpr (Fn == BuiltinFn::Dsum) fn_res = dsum(val);
+      // ...
+      return eval_binary_op_static<Op>(fn_res, env.get_slot_value(right_slot_));
+    }
+  };
+
+- Impact:
+  * Eliminates nested virtual dispatch for all single-variable builtin comparisons (`dsum(i) == c3`, `dsum(i) == c4`).
+  * `BinaryExprVarOpNode<(BinaryOp)5>::evaluate` (previously the #1 hotspot at 147.00 ms self-weight) completely vanished from the top hotspot list!
+  * Direct evaluation runs at native CPU speed across high-frequency candidate validation loops.
+
+
+25. AssignStmtNode Specialization (AssignLit, AssignVar, AssignOpSelfLit, AssignExpr)
+--------------------------------------------------------------------------------
+- Problem:
+  `AssignStmtNode::execute` was a persistent hotspot (104.00 ms self-weight, 132.00 ms total weight)
+  due to checking a 4-branch ladder on every variable assignment:
+    `if (slot_ < 0) ... if (expr_is_lit_) ... else if (expr_slot_ >= 0) ... else if (raw_expr_) ...`
+  Hot inner loops frequently execute assignments like `stop = 1;` (literal), `temp = t;` (variable copy),
+  and `k = k + 1;` / `mult = mult * 10;` / `temp = temp / 3;` (arithmetic update on self).
+  In self-update statements (`k = k + 1`), execution also dispatched through `raw_expr_->evaluate(env)`
+  polymorphically.
+
+- Solution:
+  * Subclassed `AssignStmtNode` into concrete, branchless statement nodes:
+    1. `AssignLitStmtNode`: directly executes `env.set_slot_value(slot_, expr_lit_val_);`
+    2. `AssignVarStmtNode`: directly executes `env.set_slot_value(slot_, env.get_slot_value(expr_slot_));`
+    3. `AssignOpSelfLitStmtNode<Op>`: directly executes `env.set_slot_value(slot_, eval_binary_op_static<Op>(env.get_slot_value(slot_), expr_lit_val_));`
+       (e.g., `k = k + 1`, `mult = mult * 10`, `temp = temp / 3` run with zero expression virtual dispatch).
+    4. `AssignExprStmtNode`: fallback for general complex expressions.
+  * In `AssignStmtNode::resolve_slots`, resolves the expression and pre-allocated slot ID once,
+    then transforms the AST node directly into the corresponding concrete subclass.
+  * Preserved full inheritance from `AssignStmtNode` so canonical loop detection in `ForStmtNode`
+    maintains complete compatibility.
+
+- Impact:
+  * Completely eliminates runtime conditional branching and slot lookups in assignment execution.
+  * Self-update assignments (`k = k + 1`, `mult = mult * 10`) eliminate expression virtual function dispatch.
+  * Assignment self-weight was cut in half: `AssignExprStmtNode::execute` now accounts for only 50.00 ms self (down from 104.00 ms).
+  * Instruments Measured Runtime: **1.74s** (down from 1.83s, -90ms / -4.9%).
+  * Search throughput surged to **~3.85M nodes/sec**.
+
+
+26. Overall Performance Results
+--------------------------------------------------------------------------------
+- Baseline runtime: ~27.69s (18.0k nodes/sec)
+- Intermediate runtime (slot resolution): 18.90s (23.3k nodes/sec)
+- AST Optimizations (direct dispatch, jump tables, inlining): ~506k nodes/sec
+- Const-correct stride & noexcept: ~655k nodes/sec
+- Precomputed hint intersections: ~849k nodes/sec
+- Adjacency lists & pre-resolved dependency shaking: ~862k nodes/sec
+- Flat intersections, precomputed candidate digits & inlined array indexing: ~891k nodes/sec
+- Pinned arrays, raw AST pointer caching & unchecked direct array writes: ~949k nodes/sec
+- Startup board pruning & incremental try_values: ~1.10M nodes/sec (5.02s)
+- AST Constant Folding: ~1.24M nodes/sec (4.40s)
+- AST Node Specialization at Resolve Time: ~1.58M nodes/sec (3.48s)
+- Static Operator Specialization via Templates: ~1.79M nodes/sec (3.15s)
+- Single-Statement Block Unboxing & Canonical For-Loop Specialization: 2.52s (~2.28M nodes/sec)
+- IfStmtNode Devirtualization & ForCount-If Loop Fusion: 2.28s (~2.53M nodes/sec)
+- FunctionCallNode Argument Caching & Builtin Specialization: 2.06s (~2.80M – 2.83M nodes/sec)
+- WhileStmtNode Canonical Loop Specialization & Small Block Unrolling: 1.83s (~3.33M – 3.34M nodes/sec)
+- Builtin Comparison Specialization & AssignStmtNode Specialization: 1.74s (~3.85M nodes/sec)
+================================================================================
+
+
+
+

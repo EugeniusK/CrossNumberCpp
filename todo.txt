@@ -1,0 +1,390 @@
+================================================================================
+CrossNumber Solver: Performance Optimization Backlog & Context (todo.txt)
+================================================================================
+
+1. CURRENT PERFORMANCE BASELINE & RECENT PROGRESS
+--------------------------------------------------------------------------------
+Benchmark: Problems/eijsink.puzzle
+Progress Trajectory:
+  - Initial unoptimized baseline:                    ~27.7s (~18k nodes/sec)
+  - Post try_values pruning & search:                 5.02s (~1.10M nodes/sec)
+  - Post AST constant folding:                        4.40s (~1.24M nodes/sec)
+  - Post AST operand node specialization:             3.48s (~1.58M nodes/sec)
+  - Post static operator inlining:                    3.15s (~1.79M nodes/sec)
+  - Post Block Unboxing & For-Loop Specialization:      2.52s (~2.28M nodes/sec)
+  - Post IfStmt Devirtualization & ForCount-If Fusion: 2.28s (~2.53M nodes/sec)
+  - Post Builtin FunctionCall Specialization:         2.06s (~2.80M – 2.83M nodes/sec)
+  - Post WhileStmt Specialization & Block Unrolling:  1.83s (~3.33M – 3.34M nodes/sec)
+  - Post Builtin Comparison (Option A) & Assign Specialization (Option B): 1.74s (~3.85M nodes/sec)
+
+What Was Just Completed:
+  - Option A: Builtin-Variable Binary Comparison Specialization (FnCall1VarVarOpNode & FnCall1VarLitOpNode)
+    Eliminated nested virtual calls for comparisons like `dsum(i) == c3` and `dsum(i) == c4` in candidate loops.
+    Directly evaluates the builtin on the first variable slot and compares against the second variable/literal slot with 0 virtual calls.
+    Result: `BinaryExprVarOpNode<(BinaryOp)5>::evaluate` (previously #1 hotspot at 147 ms self) completely vanished!
+  - Option B (Action 3): AssignStmtNode Specialization
+    Replaced runtime conditional ladders in AssignStmtNode::execute with concrete branchless subclasses:
+    AssignLitStmtNode, AssignVarStmtNode, AssignOpSelfLitStmtNode<Op> (for self-updates like k = k + 1, mult = mult * 10, temp = temp / 3), and AssignExprStmtNode.
+    Result: Assign self-weight dropped from 104 ms down to 50 ms (-52%).
+    Total benchmark runtime dropped from 1.83s down to 1.74s (-90ms / -4.9%). Peak throughput reached ~3.85M nodes/sec.
+
+Latest Profiler Breakdown (Instruments Time Profiler trace @ 1.74s total runtime):
+  - Environment::get_slot_value:                 179.00 ms self (inlined, 10.3%)
+  - ArrayCrossNumber::set_value:                 141.00 ms self (141.00 ms total weight, 8.1%)
+  - ForCountIfVarLimitStmtNode::execute:         121.00 ms self (266.00 ms total weight, 15.3%) [Runs a17, d24]
+  - IfThenStmtNode::execute:                     117.00 ms self (351.00 ms total weight, 20.2%) [Runs d37 inner if]
+  - BlockStmtNode::execute:                      112.00 ms self (796.00 ms total weight, 45.8%)
+  - WhileVarSquareVarLimitStmtNode<Op 8>:         93.00 ms self (367.00 ms total weight, 21.1%) [Runs d37 while]
+  - ArrayCrossNumber::clear_value:                91.00 ms self (91.00 ms total weight, 5.2%)
+  - BinaryExprLitOpNode<(BinaryOp)5>::evaluate:   64.00 ms self (118.00 ms total weight, 6.8%)  [Op 5 = Equal, e.g. ... == 0]
+  - OUTLINED_FUNCTION_1:                          61.00 ms self (61.00 ms total weight, 3.5%)
+  - OutputIndexAssignStmtNode::execute:           51.00 ms self (102.00 ms total weight, 5.9%)
+  - AssignExprStmtNode::execute:                  50.00 ms self (80.00 ms total weight, 4.6%)   [Runs s = dsum(i)]
+  - BinaryVarExprOpNode<(BinaryOp)4>::evaluate:   45.00 ms self (67.00 ms total weight, 3.9%)   [Op 4 = Modulo, e.g. i % (k * k)]
+  - ArrayCrossNumber::clear_values:               44.00 ms self (150.00 ms total weight, 8.6%)
+  - Environment::set_output_array:                43.00 ms self (51.00 ms total weight, 2.9%)
+  - WhileBaseStmtNode::execute_body:              40.00 ms self (263.00 ms total weight, 15.1%)
+  - BinaryExprExprOpNode<(BinaryOp)11>::evaluate: 40.00 ms self (76.00 ms total weight, 4.4%)   [Op 11 = LogicalAnd in d24]
+  - VarDeclNode::execute:                         36.00 ms self (44.00 ms total weight, 2.5%)
+  - ArrayCrossNumber::digit_shake_with_dependencies: 32.00 ms self (384.00 ms total weight, 22.1%)
+  - Environment::set_slot_value:                  32.00 ms self (62.00 ms total weight, 3.6%)
+  - reverse_num:                                  32.00 ms self (32.00 ms total weight, 1.8%)
+
+Key Discovery:
+  The remaining interpreter bottlenecks map directly to dynamic clue scripts re-evaluated during search:
+  1. Clue d37: Square-free check inside `while (k * k <= i)`:
+     - `IfThenStmtNode::execute` (117 ms self, 351 ms total)
+     - `WhileVarSquareVarLimitStmtNode` (93 ms self, 367 ms total)
+     - `BinaryExprLitOpNode<Equal>` (64 ms self: `... == 0`)
+     - `AssignExprStmtNode` (50 ms self: `s = dsum(i)`)
+     - `BinaryVarExprOpNode<Modulo>` (45 ms self: `i % (k * k)`)
+  2. Clues a17 & d24: Counting loops over 10,000 items:
+     - `ForCountIfVarLimitStmtNode::execute` (121 ms self, 266 ms total)
+     - `BinaryExprExprOpNode<LogicalAnd>` (40 ms self: `is_prime(i) && dsum(i) == c4`)
+  3. Board state operations:
+     - `set_value` + `clear_value` + `clear_values` (276 ms self combined)
+
+
+
+
+
+================================================================================
+2. OPTIMIZATION ACTIONS & IMPLEMENTATION BLUEPRINT
+================================================================================
+
+--------------------------------------------------------------------------------
+ACTION 1: Single-Statement Block Unboxing & Block Flattening  [COMPLETED]
+--------------------------------------------------------------------------------
+Status: COMPLETED & VERIFIED (Instruments trace: self-weight dropped 504ms -> 205ms, total 2.59s -> 1.14s)
+
+Problem:
+  Every `{ ... }` block in clue scripts is parsed as a BlockStmtNode.
+  For example, in `if (cond) { output[i] = 1; }`, the `then_branch` points to a
+  BlockStmtNode containing exactly 1 child statement (`OutputIndexAssignStmtNode`).
+  Executing this incurs:
+    1. Virtual call: IfStmtNode::execute
+    2. Virtual call: raw_cond_->evaluate(env)
+    3. Virtual call: BlockStmtNode::execute
+    4. Loop overhead: `for (size_t i = 0; i < 1; ++i)`
+    5. Virtual call: OutputIndexAssignStmtNode::execute
+  This results in 4 virtual function calls for a single array write.
+
+Implementation:
+  - In `BlockStmtNode::resolve_slots` (or an AST rewriting helper `resolve_stmt`):
+    If `owned_statements_.size() == 1`, unwrap it and return the single
+    `std::unique_ptr<StmtNode>` directly to the parent node.
+  - In `IfStmtNode`, `ForStmtNode`, `WhileStmtNode`:
+    When resolving body/then/else branches, if the child is a BlockStmtNode with
+    1 statement, unwrap it to point directly to the inner statement.
+  - If a BlockStmtNode contains nested BlockStmtNodes, flatten them inline into a
+    single flat statement list so the outer block iterates directly without recursion.
+
+
+--------------------------------------------------------------------------------
+ACTION 2: Canonical For-Loop Specialization (ForCountStmtNode)  [COMPLETED]
+--------------------------------------------------------------------------------
+Status: COMPLETED & VERIFIED (Instruments trace: ForStmtNode eliminated; ForCountVarLimitStmtNode 108ms self)
+
+Problem:
+  Clue scripts frequently use canonical integer counting loops:
+    `for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i = i + 1) { ... }`
+  In `ForStmtNode::execute`, each iteration performs 3 virtual dispatches:
+    1. raw_cond_->evaluate(env)
+    2. raw_body_->execute(env)
+    3. raw_update_->execute(env)
+  Across large iteration spaces (up to 10,000 items), millions of virtual calls
+  are made just to increment and test loop counters.
+
+Implementation:
+  - During `ForStmtNode::resolve_slots`:
+    Inspect the loop shape:
+      * `init`: AssignStmtNode / VarDeclNode initializing counter `var_slot` (e.g. 0).
+      * `condition`: `BinaryExprVarOpNode<Less>` or `BinaryVarVarOpNode<Less>` comparing
+        `var_slot < limit_slot` (or literal limit).
+      * `update`: AssignStmtNode incrementing `var_slot = var_slot + 1`.
+  - When matched, replace `ForStmtNode` with a specialized `ForCountStmtNode`:
+    ```cpp
+    class ForCountStmtNode : public StmtNode {
+      int var_slot_;
+      int limit_slot_;
+      int init_val_;
+      std::unique_ptr<StmtNode> body_;
+      StmtNode* raw_body_ = nullptr;
+    public:
+      void execute(Environment& env) override {
+        int limit = env.get_slot_value(limit_slot_);
+        for (int i = init_val_; i < limit; ++i) {
+          env.set_slot_value(var_slot_, i);
+          raw_body_->execute(env);
+        }
+      }
+    };
+    ```
+  - Result: Eliminates condition and update virtual calls completely (2 of 3 virtual
+    calls removed per iteration), running counter checks at native CPU speed.
+
+
+--------------------------------------------------------------------------------
+ACTION 3: AssignStmtNode Specialization (AssignLit, AssignVar, AssignOpSelfLit) [COMPLETED]
+--------------------------------------------------------------------------------
+Status: COMPLETED & VERIFIED (Specialized AssignLitStmtNode, AssignVarStmtNode, AssignOpSelfLitStmtNode<Op>, AssignExprStmtNode)
+
+Problem:
+  `AssignStmtNode::execute` currently executes a chain of 3 runtime conditional branches:
+    ```cpp
+    if (slot_ < 0) [[unlikely]] ...
+    if (expr_is_lit_) env.set_slot_value(slot_, expr_lit_val_);
+    else if (expr_slot_ >= 0) env.set_slot_value(slot_, env.get_slot_value(expr_slot_));
+    else if (raw_expr_) env.set_slot_value(slot_, raw_expr_->evaluate(env));
+    ```
+  Hot assignments inside loops (`k = k + 1`, `mult = mult * 10`, `a = b`, `stop = 1`)
+  constantly branch through this ladder.
+
+Implementation:
+  - Specialize `AssignStmtNode` at resolve time (`resolve_slots`) into concrete subclasses:
+    1. `AssignLitStmtNode`:
+       `void execute(Environment& env) override { env.set_slot_value(slot_, val_); }`
+    2. `AssignVarStmtNode`:
+       `void execute(Environment& env) override { env.set_slot_value(dst_, env.get_slot_value(src_)); }`
+    3. `AssignIncrStmtNode` (for patterns like `k = k + 1`):
+       Directly increments `env.set_slot_value(slot_, env.get_slot_value(slot_) + step_);`
+       bypassing expression evaluation completely.
+    4. `AssignExprStmtNode`: Fallback for general expressions.
+
+
+--------------------------------------------------------------------------------
+ACTION 4: FunctionCallNode Argument Caching & Specialization  [COMPLETED]
+--------------------------------------------------------------------------------
+Status: COMPLETED & VERIFIED (FunctionCallVar1Node specialized; argument slots and literal values cached; constant builtins folded)
+
+Problem:
+  Builtin calls (`dsum(i)`, `get_nth_digit(i, 2)`, `is_prime(i)`, `is_palindrome(i)`)
+  evaluated arguments via virtual dispatch: `args_[0]->evaluate(env)`.
+  When `args_[0]` was a `VariableNode`, this invoked a polymorphic method just to read
+  `env.get_slot_value(slot)`.
+
+Implementation:
+  - In `FunctionCallNode`, resolved argument slot IDs and literal constants at `resolve_slots`:
+    Cached `int arg_slots_[4]`, `bool arg_is_lit_[4]`, and `int arg_lit_vals_[4]`.
+  - Added inline argument evaluator `get_arg(i, env)` that reads slots or literal values
+    directly, falling back to `args_[i]->evaluate(env)` only for complex expressions.
+  - Specialized high-frequency 1-argument slot functions (`is_prime(i)`, `dsum(i)`,
+    `is_palindrome(i)`, `isqrt(i)`, `reverse(i)`) into `FunctionCallVar1Node<Fn>`,
+    evaluating `env.get_slot_value(slot)` with zero virtual calls and zero switch branches.
+  - Folded constant builtins with all-literal arguments at parse/fold time into `LiteralNode`.
+
+
+--------------------------------------------------------------------------------
+ACTION 5: IfStmtNode Devirtualization & ForCount-If Fusion  [COMPLETED]
+--------------------------------------------------------------------------------
+Status: COMPLETED & VERIFIED (IfThenStmtNode implemented; ForCountIfVarLimitStmtNode and ForCountIfLitLimitStmtNode specialized)
+
+Problem:
+  1. In `src/ast.cpp`:
+     `if (raw_cond_->evaluate(env) != 0) { then_branch->execute(env); }`
+     Notice it called `then_branch->execute(env)` (dereferencing `std::unique_ptr`)
+     instead of using the cached `raw_then_->execute(env)`.
+  2. The majority (>95%) of `if` statements in clue scripts have NO `else` branch
+     (`else_branch == nullptr`). The `else if (raw_else_)` branch was checked on
+     every false condition.
+  3. Millions of `if` executions occur as loop bodies inside canonical counting loops.
+
+Implementation:
+  - Ensured `raw_then_->execute(env)` is called directly via cached raw pointer with `[[likely]]`.
+  - Specialized `IfStmtNode` into `IfThenStmtNode` (when `else_branch == nullptr`) to completely
+    eliminate the `raw_else_` check on false conditions.
+  - Fused canonical counting loops with `IfThenStmtNode` bodies into `ForCountIfVarLimitStmtNode`
+    and `ForCountIfLitLimitStmtNode`: evaluates condition and invokes `raw_then_->execute(env)`
+    directly inside the native C++ loop, completely eliminating the intermediate `IfStmtNode::execute`
+    virtual call per loop iteration.
+
+
+--------------------------------------------------------------------------------
+ACTION 6: WhileStmtNode Canonical Loop Specialization  [COMPLETED]
+--------------------------------------------------------------------------------
+Status: COMPLETED & VERIFIED (Specialized WhileVarLitCondStmtNode, WhileVarVarCondStmtNode, WhileVarSquareVarLimitStmtNode, WhileVarSquareLitLimitStmtNode, WhileVarCondStmtNode, WhileVarModVarZeroStmtNode; 2-statement body direct bypass; small block unrolling)
+
+Problem:
+  In clue scripts, `while` loops execute millions of iterations in multiple hot patterns:
+  1. Sentinel loop: `while (stop == 0) { ... }`
+  2. Numerical reduction / stepping loop: `while (temp > 0) { ... }` or `while (t < OUTPUT_ARRAY_LENGTH) { ... }`
+  3. Squared bound search: `while (k * k <= i) { ... }` (in d37) or `while (i * i < OUTPUT_ARRAY_LENGTH) { ... }`
+  4. Prime factor reduction: `while (n % p == 0) { ... }`
+  Previously, every iteration dispatched 2 virtual calls (`raw_cond_->evaluate` and `raw_body_->execute`).
+  For `k * k <= i`, condition evaluation also incurred inner virtual dispatch to `Multiply`.
+
+Implementation:
+  - In `WhileStmtNode::resolve_slots`:
+    Pattern-matches condition into concrete template subclasses:
+    1. `WhileVarLitCondStmtNode<Op>`: checks `eval_binary_op_static<Op>(env.get_slot_value(slot), lit_val)` directly.
+    2. `WhileVarVarCondStmtNode<Op>`: checks `eval_binary_op_static<Op>(env.get_slot_value(left_slot), env.get_slot_value(right_slot))` directly.
+    3. `WhileVarSquareVarLimitStmtNode<Op>`: directly checks `var * var <= limit` using native integer multiplication and comparison.
+    4. `WhileVarSquareLitLimitStmtNode<Op>`: directly checks `var * var < lit`.
+    5. `WhileVarModVarZeroStmtNode`: checks `num % div == 0` directly.
+    6. `WhileVarCondStmtNode`: checks `env.get_slot_value(slot) != 0` directly.
+  - In `WhileBaseStmtNode`:
+    When body is a 2-statement `BlockStmtNode`, caches `raw_stmt0_` and `raw_stmt1_` and invokes
+    them directly, completely bypassing the intermediate `BlockStmtNode::execute` virtual dispatch.
+  - In `BlockStmtNode::execute`:
+    Directly unrolls blocks of size 2, 3, or 4 to eliminate iteration loop overhead.
+
+
+--------------------------------------------------------------------------------
+ACTION 7: Fused While/Modulo-Zero Specialization for Clue d37 (WhileSquareFreeStmtNode / IfVarModSquareZeroStmtNode)
+--------------------------------------------------------------------------------
+Hotspots:
+  - IfThenStmtNode::execute (117 ms self, 351 ms total)
+  - WhileVarSquareVarLimitStmtNode<Op 8>::execute (93 ms self, 367 ms total)
+  - BinaryExprLitOpNode<(BinaryOp)5>::evaluate (64 ms self, 118 ms total) [i % (k * k) == 0]
+  - BinaryVarExprOpNode<(BinaryOp)4>::evaluate (45 ms self, 67 ms total)  [i % (k * k)]
+Estimated Gain: ~180 – 250 ms
+
+Problem:
+  Clue d37 executes for all candidates during domain shaking and cell assignment:
+    ```js
+    while (k * k <= i) {
+      if (i % (k * k) == 0) { is_sq_free = 0; }
+      k = k + 1;
+    }
+    ```
+  Currently:
+  1. `WhileVarSquareVarLimitStmtNode` runs the while condition (93 ms self).
+  2. Each iteration calls `raw_stmt0_->execute` -> `IfThenStmtNode::execute` (117 ms self).
+  3. Inside `IfThenStmtNode`, `cond->evaluate` dispatches polymorphically:
+     - `BinaryExprLitOpNode<Equal>` (64 ms self)
+     - `BinaryVarExprOpNode<Modulo>` (45 ms self)
+     - `BinaryVarVarOpNode<Multiply>` (`k * k`)
+  4. Each iteration calls `raw_stmt1_->execute` -> `AssignOpSelfLitStmtNode<Add>::execute`.
+  This accounts for over 350 ms of CPU time in nested virtual dispatch and `%` calculations.
+
+Implementation:
+  - Option 1 (Fused While Loop): Detect when a while loop has the canonical pattern:
+    Condition: `var * var <= limit`
+    Statement 0: `if (limit % (var * var) == 0) flag = 0;`
+    Statement 1: `var = var + 1;`
+    Fuse into a single concrete node `WhileVarSquareModZeroStepStmtNode` executing the entire loop in native C++!
+  - Option 2 (Specialized Condition Node): Specialize `BinaryOpNode` when left is `var1 % (var2 * var2)` and right is `0`
+    into `BinaryVarSquareModZeroOpNode`, avoiding intermediate binary op allocation and virtual calls.
+
+
+--------------------------------------------------------------------------------
+ACTION 8: ForCount Loop Specialization for Builtin Comparisons (ForCountIfFnVarLimitStmtNode)
+--------------------------------------------------------------------------------
+Hotspots:
+  - ForCountIfVarLimitStmtNode::execute (121 ms self, 266 ms total)
+  - BinaryExprExprOpNode<(BinaryOp)11>::evaluate (40 ms self, 76 ms total) [LogicalAnd in d24]
+Estimated Gain: ~50 – 80 ms
+
+Problem:
+  In clue a17:
+    `for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i = i + 1) if (dsum(i) == c3) output[i] = 1;`
+  In clue d24:
+    `for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i = i + 1) if (is_prime(i) && dsum(i) == c4) output[i] = 1;`
+  Both clues re-evaluate dynamically whenever clue dependencies `c3` or `c4` are modified.
+  `ForCountIfVarLimitStmtNode` iterates 10,000 times and makes a virtual call to `raw_cond_->evaluate(env)`
+  on every iteration (10,000 virtual calls per clue execution).
+
+Implementation:
+  - In `ForStmtNode::resolve_slots`:
+    When `cond` is `FnCall1VarVarOpNode<Fn, Op>` where `fn_slot == loop_var_slot`:
+    Specialize to `ForCountIfFnVarLimitStmtNode<Fn, Op>`:
+    ```cpp
+    int limit = env.get_slot_value(limit_slot_);
+    int rhs = env.get_slot_value(right_slot_);
+    for (int i = init_val_; i < limit; ++i) {
+      if (eval_binary_op_static<Op>(dsum(i), rhs)) {
+        raw_then_->execute(env);
+      }
+    }
+    ```
+    Eliminates all 10,000 virtual condition calls per loop execution.
+
+
+--------------------------------------------------------------------------------
+ACTION 9: Assign Specialization for Single-Argument Function Calls (AssignFnCall1VarStmtNode)
+--------------------------------------------------------------------------------
+Hotspots:
+  - AssignExprStmtNode::execute (50 ms self, 80 ms total)
+Estimated Gain: ~20 – 35 ms
+
+Problem:
+  In clue d37:
+    `let s = dsum(i);`
+  AssignStmtNode currently only specializes `AssignLit`, `AssignVar`, and `AssignOpSelfLit`.
+  Assignments from function calls (`s = dsum(i)`) fall back to `AssignExprStmtNode`, incurring
+  a virtual call to `raw_expr_->evaluate(env)` for every iteration of the outer for-loop.
+
+Implementation:
+  - In `AssignStmtNode::resolve_slots`:
+    If `expr` is a single-variable builtin function call (`is_fn_call_var1`), specialize to:
+    ```cpp
+    template <BuiltinFn Fn>
+    class AssignFnCall1VarStmtNode : public AssignStmtNode {
+      int slot_;
+      int arg_slot_;
+    public:
+      void execute(Environment& env) override {
+        env.set_slot_value(slot_, eval_builtin_1<Fn>(env.get_slot_value(arg_slot_)));
+      }
+    };
+    ```
+
+
+--------------------------------------------------------------------------------
+ACTION 10: Board State Array Operations Optimization
+--------------------------------------------------------------------------------
+Hotspots:
+  - ArrayCrossNumber::set_value (141 ms self)
+  - ArrayCrossNumber::clear_value (91 ms self)
+  - ArrayCrossNumber::clear_values (44 ms self, 150 ms total)
+Estimated Gain: ~30 – 50 ms
+
+Problem:
+  `set_value`, `clear_value`, and `clear_values` consume 276 ms total.
+  `clear_values` accepts a `const std::vector<int>& cells` where each entry is `row * size_ + col`,
+  and clears board state. Inlined direct access and minimizing vector indexing overhead can shave
+  significant cycle count in core backtracking search.
+
+
+================================================================================
+3. CONSTRAINTS & VERIFICATION PROTOCOL FOR RESUMING LLM
+================================================================================
+CRITICAL USER INSTRUCTIONS:
+  - DO NOT run any benchmarking or timing loops on your own.
+  - The user verifies and profiles in Instruments to provide performance feedback.
+  - Only verify that the code compiles cleanly and runs without errors.
+
+Verification Commands:
+  1. Build:
+     `make clean && make a.out`
+     (Must compile with zero warnings under clang++ -g -O3 -Wall -std=c++20).
+  2. Correctness:
+     `./a.out -v Problems/eijsink.puzzle`
+     Expected Output:
+       - Explored nodes: 456,129 | Depth: 0/48
+       - Digit count distribution:
+         Count | 15 | 22 |  9 |  8 |  8 |  9 | 12 |  4 |  4 | 13 |
+       - Exit code: 0
+  3. Additional check:
+     `./a.out Problems/liersch_patki.puzzle` (Exit code: 0).
+================================================================================

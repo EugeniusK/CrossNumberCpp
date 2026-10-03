@@ -30,6 +30,7 @@ std::unique_ptr<BlockStmtNode> Parser::parse_program() {
   while (curr.type != TokenType::End) {
     prog->add_statement(parse_statement());
   }
+  prog->fold_constants();
   return prog;
 }
 
@@ -66,8 +67,15 @@ std::unique_ptr<StmtNode> Parser::parse_statement() {
     expect("=");
     auto val = parse_expr();
     expect(";");
-    return std::make_unique<IndexAssignStmtNode>(name, std::move(idx),
-                                                 std::move(val));
+    if (name == "tmp") {
+      return std::make_unique<TmpIndexAssignStmtNode>(std::move(idx),
+                                                      std::move(val));
+    } else if (name == "output") {
+      return std::make_unique<OutputIndexAssignStmtNode>(std::move(idx),
+                                                         std::move(val));
+    } else {
+      throw std::runtime_error("Assignment to invalid array: " + name);
+    }
   } else {
     // Case 2: Regular variable assignment -> x = expr;
     expect("=");
@@ -128,14 +136,14 @@ std::unique_ptr<StmtNode> Parser::parse_if_stmt() {
   auto cond = parse_expr();
   expect(")");
   auto then_branch = parse_statement();
-  std::unique_ptr<StmtNode> else_branch = nullptr;
 
   if (curr.text == "else") {
     advance();
-    else_branch = parse_statement();
+    auto else_branch = parse_statement();
+    return std::make_unique<IfStmtNode>(std::move(cond), std::move(then_branch),
+                                        std::move(else_branch));
   }
-  return std::make_unique<IfStmtNode>(std::move(cond), std::move(then_branch),
-                                      std::move(else_branch));
+  return std::make_unique<IfThenStmtNode>(std::move(cond), std::move(then_branch));
 }
 
 std::unique_ptr<StmtNode> Parser::parse_for_stmt() {

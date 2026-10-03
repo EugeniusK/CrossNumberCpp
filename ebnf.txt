@@ -1,15 +1,15 @@
 <program>       ::= <stmt>*
-<stmt>          ::= <var_decl> | <assign_stmt> | <if_stmt> | <for_stmt> | <while_stmt> | <print_stmt> | <block_stmt>
+<stmt>          ::= <var_decl> | <assign_stmt> | <array_assign_stmt> | <if_stmt> | <for_stmt> | <while_stmt> | <print_stmt> | <block_stmt>
 
-<block_stmt>     ::= "{" <stmt>* "}"
-<var_decl>       ::= "let" <ID> "=" <expr> ";"
-<assign_stmt>    ::= <ID> "=" <expr> ";"
-<if_stmt>        ::= "if" "(" <expr> ")" <stmt> ("else" <stmt>)?
-<for_stmt>       ::= "for" "(" (<var_decl> | <assign_stmt>) <expr> ";" <assign_stmt_no_semi> ")" <stmt>
-<while_stmt>     ::= "while" "(" <expr> ")" <stmt>
-<assign_stmt_no_semi> ::= <ID> "=" <expr>
-<print_stmt>     ::= "print" "(" <expr> ")" ";"
-
+<block_stmt>         ::= "{" <stmt>* "}"
+<var_decl>           ::= "let" <ID> "=" <expr> ";"
+<assign_stmt>        ::= <ID> "=" <expr> ";"
+<array_assign_stmt>  ::= ("tmp" | "output") "[" <expr> "]" "=" <expr> ";"
+<if_stmt>            ::= "if" "(" <expr> ")" <stmt> ("else" <stmt>)?
+<for_stmt>           ::= "for" "(" (<var_decl> | <assign_stmt>) <expr> ";" <assign_stmt_no_semi> ")" <stmt>
+<while_stmt>         ::= "while" "(" <expr> ")" <stmt>
+<assign_stmt_no_semi>::= <ID> "=" <expr>
+<print_stmt>         ::= "print" "(" <expr> ")" ";"
 
 <expr>           ::= <logic_or>
 // 15 complete
@@ -32,92 +32,108 @@
 // 4 MISSING
 // 3 partial - missing prefix "++", prefix "--", ~, cast, indirection, address-of, reflection, size-of, await-expression, dynamic memory (de)allocation
 <unary>          ::= ("+" | "-" | "!") <unary> | <primary>
-<primary>        ::= <NUMBER> | <BOOLEAN> | <ID> | "(" <expr> ")"
+<primary>        ::= <NUMBER> | <BOOLEAN> | <fn_call> | <index_read> | <ID> | "(" <expr> ")"
+
+<fn_call>        ::= <ID> "(" (<expr> ("," <expr>)*)? ")"
+<index_read>     ::= <ID> "[" <expr> "]"
 
 <BOOLEAN>        ::= "true" | "false"
 <NUMBER>         ::= [0-9]+
 <ID>             ::= ([a-z] | [A-Z] | "_")+ ([a-z] | [A-Z] | [0-9] | "_" )*
 
-
-
-  // square
-  Hint a1 = Hint(1, true, std::string(R"(
-    for (let i = 0; i <= isqrt(OUTPUT_ARRAY_LENGTH); i= i + 1) {output[i * i] = 1;}
-  )"));
-  // multiple 1102
-  Hint a3 = Hint(3, true, std::string(R"(
-    for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i= i + 1) {
-      if (i % 1102 == 0) {
-        output[i] = 1;
-      }
-    }
-  )"));
-
-  Hint a7 = Hint(7, true);
-  // square
-  Hint a8 = Hint(8, true, std::string(R"(
-    for (let i = 0; i <= isqrt(OUTPUT_ARRAY_LENGTH); i= i + 1) {output[i * i] = 1;}
-  )"));
-  // square
-  Hint a9 = Hint(9, true, std::string(R"(
-    for (let i = 0; i <= isqrt(OUTPUT_ARRAY_LENGTH); i= i + 1) {output[i * i] = 1;}
-  )"));
-  // square
-  Hint a10 = Hint(10, true, std::string(R"(
-    for (let i = 0; i <= isqrt(OUTPUT_ARRAY_LENGTH); i= i + 1) {output[i * i] = 1;}
-  )"));
-  Hint a11 = Hint(11, true);
-  // cube
-  Hint a13 = Hint(13, true, std::string(R"(
-    for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i= i + 1) {
-      if (i * i * i < OUTPUT_ARRAY_LENGTH) {
-        output[i * i * i] = 1;
-      }
-    }
-  )"));
-  // prime
-  Hint a15 = Hint(15, true, std::string(R"(
-    for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i= i + 1) {
-      if (is_prime(i)) {
-        output[i] = 1;
-      }
-    }
-  )"));
-  // prime
-  Hint a18 = Hint(18, true, std::string(R"(
-    for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i= i + 1) {
-      if (is_prime(i)) {
-        output[i] = 1;
-      }
-    }
-  )"));
-  Hint a19 = Hint(19, true);
-  Hint a20 = Hint(20, true);
-  Hint a21 = Hint(21, true);
-  // cube
-  Hint a22 = Hint(22, true, std::string(R"(
-    for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i= i + 1) {
-      if (i * i * i < OUTPUT_ARRAY_LENGTH) {
-        output[i * i * i] = 1;
-      }
-    }
-  )"));
-  Hint a23 = Hint(23, true);
-  Hint a25 = Hint(25, true);
-  // square
-  Hint a26 = Hint(26, true, std::string(R"(
-    for (let i = 0; i <= isqrt(OUTPUT_ARRAY_LENGTH); i= i + 1) {output[i * i] = 1;}
-  )"));
-  // square
-  Hint a27 = Hint(27, true, std::string(R"(
-    for (let i = 0; i <= isqrt(OUTPUT_ARRAY_LENGTH); i= i + 1) {output[i * i] = 1;}
-  )"));
-  Hint a28 = Hint(28, true);
-  // Hint a28 = Hint(28, true, std::string(R"(
-  //   let i = 0;
-  //   while (i * i * i < OUTPUT_ARRAY_LENGTH) {
-  //     output[i * i * i] = 1;
-  //     i = i + 1;
-  //   }
-  // )"));
-  Hint a29 = Hint(29, true);
+// =============================================================================
+// BUILT-IN FUNCTIONS & SPECIAL IDENTIFIERS
+// =============================================================================
+// Built-in Functions:
+//   - is_prime(n)              -> returns 1 if n is prime, 0 otherwise
+//   - is_palindrome(n)         -> returns 1 if decimal representation of n is palindromic
+//   - pow(base, exp)           -> returns base^exp (optimized fast-path for base 10)
+//   - isqrt(n)                 -> integer square root floor(sqrt(n))
+//   - dsum(n)                  -> digit sum (accelerated via 1,000,000-entry lookup table)
+//   - get_nth_digit(n, digit)  -> 1-indexed digit from the left
+//   - reverse(n)               -> reverses decimal digits of n
+//
+// Special Identifiers:
+//   - OUTPUT_ARRAY_LENGTH      -> size of the output grid / search domain
+//   - output                   -> output array for valid clue numbers: output[idx] = 1;
+//   - tmp                      -> temporary scratchpad array: tmp[idx] = val;
+//   - a1, a2..., d1, d2...     -> reference to solved values of other across/down clues
+//   - c0, c1... c9             -> reference to counts of digits '0' through '9' on the board
+//
+// =============================================================================
+// AST PERFORMANCE OPTIMIZATION PATTERNS
+// =============================================================================
+// The AST resolver and execution engine recognize general, compiler-grade patterns
+// during slot resolution and compile them into specialized, branchless C++ template
+// nodes that bypass virtual function dispatch. The following patterns are general,
+// robust to code style variations, and significantly faster:
+//
+// 1. CANONICAL COUNTING FOR-LOOPS (ForCountStmtNode)
+//    - Pattern:
+//        for (let i = 0; i < OUTPUT_ARRAY_LENGTH; i = i + 1) { ... }
+//        for (let i = 0; i < limit; i = i + 1) { ... }
+//        for (let i = 0; i < 1000; i = i + 1) { ... }
+//    - General & robust: Supports variable or literal limits, counting up (`i = i + step`),
+//      counting down (`i = i - step`), and standard bounds (`<`, `<=`, `>`, `>=`).
+//    - Benefit: Eliminates condition and update polymorphic AST dispatches with a native
+//      C++ loop. Condition testing and counter updates execute at native CPU speed.
+//
+// 2. SINGLE-STATEMENT BLOCK UNBOXING
+//    - Pattern:
+//        if (cond) { output[i] = 1; }
+//        while (cond) { x = x + 1; }
+//    - General & robust: Applies to any `{ single_statement; }` block regardless of
+//      statement type.
+//    - Benefit: Single-statement blocks are unwrapped at compile time. The parent
+//      invokes the child directly, bypassing `BlockStmtNode::execute` virtual calls
+//      and iteration overhead entirely.
+//
+// 3. SMALL-BLOCK UNROLLING (BlockStmtNode)
+//    - Pattern: Any multi-statement block with 2, 3, or 4 statements.
+//    - General & robust: Applies universally to any sequence of statements anywhere in
+//      the script.
+//    - Benefit: Unrolled execution directly executes the sequence without loop counter
+//      increments or vector bounds checks.
+//
+// 4. IF-THEN WITHOUT ELSE (IfThenStmtNode)
+//    - Pattern:
+//        if (cond) { ... }      // Avoid empty `else {}` blocks
+//    - General & robust: Applies to any `if` statement lacking an `else` branch,
+//      making zero assumptions about what `cond` or the body contains.
+//    - Benefit: On false conditions (which occur millions of times in candidate checks),
+//      returns immediately via branch-predicted `[[likely]]` without checking null `else`.
+//
+// 5. PRIMITIVE LITERAL & VARIABLE ASSIGNMENTS (AssignLit & AssignVar)
+//    - Pattern:
+//        stop = 1;          mult = 1;          is_sq_free = 0;   // Literal constant
+//        temp = sq;         a = b;                               // Variable copy
+//    - General & robust: Matches any literal constant write or variable copy.
+//    - Benefit: Replaces runtime condition ladders and slot lookups with a direct,
+//      single-instruction memory write into the environment slot.
+//
+// 6. STATIC OPERATOR TEMPLATE SPECIALIZATION
+//    - Pattern: Binary operations on primitive operands:
+//        `var OP literal`, `var OP var`, `literal OP var`, `expr OP literal`
+//    - General & robust: Covers all binary operators (`+`, `-`, `*`, `/`, `%`, `==`,
+//      `!=`, `<`, `<=`, `>`, `>=`, `&&`, `||`) across all expressions.
+//    - Benefit: Inlines the native C++ operator (`eval_binary_op_static<Op>`),
+//      completely avoiding runtime switch statements or operator function lookup tables.
+//
+// 7. PARSE-TIME CONSTANT FOLDING
+//    - Pattern: Constant mathematical expressions:
+//        let limit = 10 * 10;
+//        let base = ipow(10, 2);
+//        let root = isqrt(10000);
+//    - General & robust: Pure constant arithmetic and built-in functions with literal
+//      arguments are evaluated once at parse time into `LiteralNode`.
+//    - Benefit: Incurs zero runtime execution cost during search.
+//
+// 8. SINGLE-ARGUMENT BUILTINS ON VARIABLES (FunctionCallVar1Node)
+//    - Pattern: Standalone single-argument built-in calls on a variable:
+//        is_prime(i)       dsum(val)         isqrt(n)
+//        is_palindrome(n)  reverse(x)
+//    - General & robust: Works anywhere the function call appears (conditions,
+//      assignments, expressions).
+//    - Benefit: Evaluates the variable argument directly from the environment slot
+//      with zero argument polymorphic virtual dispatch.
+// =============================================================================

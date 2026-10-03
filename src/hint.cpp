@@ -24,16 +24,30 @@ std::vector<std::string> Hint::get_dependencies() const {
 }
 
 void Hint::set_env(const std::string& variable_name, int val) {
-  env.set_var(variable_name, val);
+  int slot = env.find_slot(variable_name);
+  if (slot >= 0) {
+    env.set_slot_value(slot, val);
+  } else {
+    env.set_var(variable_name, val);
+  }
 }
 
-int Hint::get_output_array(int idx) { return env.get_output_array(idx); }
+void Hint::finalize_candidates() {
+  static constexpr int pow10[] = {
+      1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000
+  };
+  candidates.resize(possible_values.size());
+  for (size_t i = 0; i < possible_values.size(); ++i) {
+    int v = possible_values[i];
+    candidates[i].value = v;
+    for (int d = 0; d < length && d < 8; ++d) {
+      candidates[i].digits[d] = static_cast<uint8_t>((v / pow10[length - 1 - d]) % 10);
+    }
+  }
+}
 
 int Hint::get_partial_identifier() const { return partial_identifier; }
-std::string Hint::get_identifier() const { return identifier; }
-bool Hint::get_is_horizontal() const { return is_horizontal; }
-
-int Hint::get_length() const { return length; }
+// std::string Hint::get_identifier() const { return identifier; }
 
 void Hint::set_length(int len) {
   if (len < 2) {
@@ -51,7 +65,7 @@ void Hint::run_program_on_load() {
   for (const auto& dep : list_dependencies) {
     env.get_or_create_slot(dep);
   }
-  cached_program->resolve_slots(env);
+  cached_program = resolve_stmt(std::move(cached_program), env);
   if (!get_if_has_dependencies()) {
     cached_program->execute(env);
 
@@ -72,6 +86,7 @@ void Hint::run_program_on_load() {
     }
     number_possible_values = possible_values.size();
   }
+  finalize_candidates();
 }
 
 void Hint::run_program_on_dependency() {
@@ -83,7 +98,7 @@ void Hint::run_program_on_dependency() {
     for (const auto& dep : list_dependencies) {
       env.get_or_create_slot(dep);
     }
-    cached_program->resolve_slots(env);
+    cached_program = resolve_stmt(std::move(cached_program), env);
   }
   cached_program->execute(env);
 }
@@ -92,7 +107,5 @@ const std::vector<int>& Hint::get_written_output_indices() const {
   return env.get_written_output_indices();
 }
 
-int Hint::get_x_pos() const { return x_pos; }
 void Hint::set_x_pos(int pos) { x_pos = pos; }
-int Hint::get_y_pos() const { return y_pos; }
 void Hint::set_y_pos(int pos) { y_pos = pos; }

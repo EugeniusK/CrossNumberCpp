@@ -23,6 +23,7 @@ static std::string format_number(long long n) {
 
 void SolverOne::solve(ArrayCrossNumber crossnumber) {
   std::vector<int> guesses(crossnumber.hints.size(), 0);
+  std::span<const int> guesses_span(guesses.data(), guesses.size());
   int number_guesses = 0;
   bool forward = true;
   bool increment = false;
@@ -37,6 +38,8 @@ void SolverOne::solve(ArrayCrossNumber crossnumber) {
             [](const Hint& a, const Hint& b) {
               return a.number_possible_values < b.number_possible_values;
             });
+
+  crossnumber.init_intersections();
 
   struct DepHintBinding {
     size_t dep_hint_idx;
@@ -176,7 +179,7 @@ void SolverOne::solve(ArrayCrossNumber crossnumber) {
         }
       }
 
-      if (crossnumber.try_values(guesses, number_guesses)) {
+      if (crossnumber.try_values(guesses_span, number_guesses)) {
         if (number_guesses == crossnumber.hints.size()) {
           crossnumber.apply_values(guesses, number_guesses);
 

@@ -3,6 +3,7 @@
 #include <cctype>
 #include <iostream>
 #include <numeric>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -124,13 +125,19 @@ std::string ArrayCrossNumber::display_digit_count() {
 }
 
 void ArrayCrossNumber::set_value(int val, int x_pos, int y_pos, int length,
-                                 bool is_horizontal) {
-  auto cell_idx = [&](int i) {
-    return is_horizontal ? y_pos * width + (x_pos + i)
-                         : (y_pos + i) * width + x_pos;
-  };
+                                 bool is_horizontal) noexcept {
+  static constexpr int pow10[] = {1,         10,        100,     1000,
+                                  10000,     100000,    1000000, 10000000,
+                                  100000000, 1000000000};
+
+  int idx = y_pos * width + x_pos;
+  const int stride = is_horizontal ? 1 : width;
+  int current_pow = pow10[length - 1];
+
   for (int i = 0; i < length; ++i) {
-    value[cell_idx(i)] = (val / ipow(10, length - i - 1)) % 10;
+    value[idx] = (val / current_pow) % 10;
+    current_pow /= 10;
+    idx += stride;
   }
 }
 
@@ -148,28 +155,36 @@ int ArrayCrossNumber::get_value(int x_pos, int y_pos, int length,
 }
 
 void ArrayCrossNumber::clear_value(int x_pos, int y_pos, int length,
-                                   bool is_horizontal) {
-  auto cell_idx = [&](int i) {
-    return is_horizontal ? y_pos * width + (x_pos + i)
-                         : (y_pos + i) * width + x_pos;
-  };
+                                   bool is_horizontal) noexcept {
+  int idx = y_pos * width + x_pos;
+  const int stride = is_horizontal ? 1 : width;
   for (int i = 0; i < length; ++i) {
-    value[cell_idx(i)] = -2;
+    value[idx] = -2;
+    idx += stride;
   }
 }
 
 bool ArrayCrossNumber::is_possible_value(int val, int x_pos, int y_pos,
-                                         int length, bool is_horizontal) {
-  auto cell_idx = [&](int i) {
-    return is_horizontal ? y_pos * width + (x_pos + i)
-                         : (y_pos + i) * width + x_pos;
-  };
+                                         int length,
+                                         bool is_horizontal) const noexcept {
+  static constexpr int pow10[] = {1,         10,        100,     1000,
+                                  10000,     100000,    1000000, 10000000,
+                                  100000000, 1000000000};
+
+  int idx = y_pos * width + x_pos;
+  const int stride = is_horizontal ? 1 : width;
+  int current_pow = pow10[length - 1];
+
   for (int i = 0; i < length; ++i) {
-    int idx = cell_idx(i);
-    int digit = (val / ipow(10, length - i - 1)) % 10;
-    if (value[idx] != digit && value[idx] != -2) {
+    const int current_cell = value[idx];
+    const int digit = (val / current_pow) % 10;
+
+    if (current_cell != digit && current_cell != -2) {
       return false;
     }
+
+    current_pow /= 10;
+    idx += stride;
   }
   return true;
 }
@@ -244,24 +259,107 @@ void ArrayCrossNumber::load_hint(Hint& hint) {
   hints.push_back(std::ref(hint));
 }
 
-bool ArrayCrossNumber::try_values(const std::vector<int>& arr, int count) {
-  for (int i = 0; i < count; i++) {
-    if (is_possible_value(hints[i].get().possible_values[arr[i]], hints[i])) {
-      set_value(hints[i].get().possible_values[arr[i]], hints[i]);
-    } else {
-      for (int j = 0; j <= i; j++) {
-        clear_value(hints[j]);
+void ArrayCrossNumber::init_intersections() {
+  for (auto& h_ref : hints) {
+    auto& h = h_ref.get();
+    // Prune candidates against fixed board cells once at startup
+    std::vector<int> filtered_values;
+    filtered_values.reserve(h.possible_values.size());
+    for (int val : h.possible_values) {
+      if (is_possible_value(val, h)) {
+        filtered_values.push_back(val);
       }
+    }
+    h.possible_values = std::move(filtered_values);
+    h.number_possible_values = static_cast<int>(h.possible_values.size());
+    h.finalize_candidates();
+  }
 
+  hint_intersections_.assign(hints.size(), {});
+
+  for (size_t i = 0; i < hints.size(); ++i) {
+    const auto& h1 = hints[i].get();
+    for (size_t j = i + 1; j < hints.size(); ++j) {
+      const auto& h2 = hints[j].get();
+
+      // Intersections only occur between one horizontal and one vertical hint
+      if (h1.get_is_horizontal() == h2.get_is_horizontal()) continue;
+
+      const auto& h_horiz = h1.get_is_horizontal() ? h1 : h2;
+      const auto& h_vert = h1.get_is_horizontal() ? h2 : h1;
+      const size_t idx_horiz = h1.get_is_horizontal() ? i : j;
+      const size_t idx_vert = h1.get_is_horizontal() ? j : i;
+
+      // Check geometric overlap:
+      // h_vert.x must fall within [h_horiz.x, h_horiz.x + h_horiz.length - 1]
+      // h_horiz.y must fall within [h_vert.y, h_vert.y + h_vert.length - 1]
+      if (h_vert.get_x_pos() >= h_horiz.get_x_pos() &&
+          h_vert.get_x_pos() < h_horiz.get_x_pos() + h_horiz.get_length() &&
+          h_horiz.get_y_pos() >= h_vert.get_y_pos() &&
+          h_horiz.get_y_pos() < h_vert.get_y_pos() + h_vert.get_length()) {
+        const int pos_horiz = h_vert.get_x_pos() - h_horiz.get_x_pos();
+        const int pos_vert = h_horiz.get_y_pos() - h_vert.get_y_pos();
+
+        // Record the intersection on the larger hint index (curr_idx),
+        // referencing the smaller hint index (other_idx < curr_idx).
+        if (idx_horiz > idx_vert) {
+          auto& list = hint_intersections_[idx_horiz];
+          if (list.count < 12) {
+            list.items[list.count++] = {
+                static_cast<int>(idx_vert),
+                pos_horiz,  // pos_in_self
+                pos_vert    // pos_in_other
+            };
+          }
+        } else {
+          auto& list = hint_intersections_[idx_vert];
+          if (list.count < 12) {
+            list.items[list.count++] = {
+                static_cast<int>(idx_horiz),
+                pos_vert,  // pos_in_self
+                pos_horiz  // pos_in_other
+            };
+          }
+        }
+      }
+    }
+  }
+}
+
+bool ArrayCrossNumber::try_values(std::span<const int> arr,
+                                  int count) const noexcept {
+  if (__builtin_expect(count <= 0, 0)) return true;
+
+  // Incremental validation: clues 0 .. count - 2 were already verified
+  // in previous backtracking steps. Only verify the newly placed clue (count -
+  // 1):
+  const int i = count - 1;
+  const auto* raw_hints = hints.data();
+  const auto& cand = raw_hints[i].get().candidates[arr[i]];
+
+  // Verify mutual consistency with intersecting earlier hints (j < i)
+  const auto& hint_isects = hint_intersections_[i];
+  const auto* isects = hint_isects.data();
+  const uint8_t isect_count = hint_isects.count;
+
+  for (uint8_t k = 0; k < isect_count; ++k) {
+    const auto& isect = isects[k];
+    const auto& cand_other = raw_hints[isect.other_hint_idx]
+                                 .get()
+                                 .candidates[arr[isect.other_hint_idx]];
+
+    if (cand.digits[isect.pos_in_self] !=
+        cand_other.digits[isect.pos_in_other]) {
       return false;
     }
   }
 
-  for (int i = 0; i < count; i++) {
-    clear_value(hints[i]);
-  }
-
   return true;
+}
+
+bool ArrayCrossNumber::try_values(const std::vector<int>& arr,
+                                  int count) const noexcept {
+  return try_values(std::span<const int>(arr.data(), arr.size()), count);
 }
 
 void ArrayCrossNumber::apply_values(const std::vector<int>& arr, int count) {
@@ -349,6 +447,7 @@ bool ArrayCrossNumber::digit_shake() {
     if (it != h.possible_values.end()) {
       h.possible_values.erase(it, h.possible_values.end());
       h.number_possible_values = static_cast<int>(h.possible_values.size());
+      h.finalize_candidates();
       changed = true;
     }
   }
@@ -365,7 +464,6 @@ bool ArrayCrossNumber::digit_shake() {
 bool ArrayCrossNumber::digit_shake_with_dependencies() {
   std::vector<size_t> tmp_arr;
   bool any_overall_change = false;
-  int pass_number = 1;
 
   // Helper lambda: computes the size of the Cartesian product of all dependency
   // candidate lists for hint 'h'. For example, if clue h depends on clue A (5
@@ -395,11 +493,10 @@ bool ArrayCrossNumber::digit_shake_with_dependencies() {
   while (true) {
     bool pass_changed = false;
     std::cout << "\n========================================" << std::endl;
-    std::cout << "--- Dependency Shake Pass " << pass_number << " ---"
-              << std::endl;
+    std::cout << "--- Dependency Shake Pass " << " ---" << std::endl;
     std::cout << "========================================" << std::endl;
 
-    // STEP 1: Collect all hints that declare dependencies on other
+    // // STEP 1: Collect all hints that declare dependencies on other
     // clues/variables
     std::vector<std::reference_wrapper<Hint>> remaining_hints;
     for (Hint& h : this->hints) {
@@ -407,7 +504,6 @@ bool ArrayCrossNumber::digit_shake_with_dependencies() {
         remaining_hints.push_back(h);
       }
     }
-
     // Process all dependent hints in this pass
     while (!remaining_hints.empty()) {
       // STEP 2: Greedy Ordering
@@ -426,21 +522,11 @@ bool ArrayCrossNumber::digit_shake_with_dependencies() {
 
       std::string clue_name = (h.get_is_horizontal() ? "a" : "d") +
                               std::to_string(h.get_partial_identifier());
-      long long combinations_count = compute_combinations(h);
-      int old_possible_count = h.number_possible_values;
+      (void)clue_name;
 
       std::cout << "\nEvaluating " << clue_name << ":"
-                << " current candidates = " << old_possible_count
-                << ", dependency combinations = " << combinations_count
-                << std::endl;
-      if (h.number_possible_values <= 20) {
-        std::cout << " [";
-        for (size_t k = 0; k < h.possible_values.size(); k++) {
-          std::cout << h.possible_values[k]
-                    << (k + 1 < h.possible_values.size() ? ", " : "");
-        }
-        std::cout << "]\n";
-      }
+                << " current candidates = "
+                << ", dependency combinations = " << std::endl;
 
       // STEP 3: Gather dependency lists and candidate values
       std::vector<std::string> dependencies = h.get_dependencies();
@@ -506,7 +592,6 @@ bool ArrayCrossNumber::digit_shake_with_dependencies() {
                   << " reduced to 0 (dependency domain is empty)" << std::endl;
         continue;
       }
-
       // STEP 5: Prepare candidate tracking and valid digit-length bounds
       // A number of length L must fall within [10^(L-1), 10^L) with no leading
       // zero.
@@ -529,8 +614,16 @@ bool ArrayCrossNumber::digit_shake_with_dependencies() {
       }
       std::vector<int> updated_possible_values;
 
+      // Pre-resolve dependency slots for this hint
+      std::vector<int> dep_slots;
+      dep_slots.reserve(dependencies_size);
+      for (size_t j = 0; j < dependencies_size; ++j) {
+        dep_slots.push_back(h.get_slot_for_var(dependencies[j]));
+      }
+
       // STEP 6: Iterate through every Cartesian combination of dependency
       // values
+
       for (size_t i = 0; i < static_cast<size_t>(total_combinations); i++) {
         // Mixed-radix index decomposition: maps linear index 'i' into
         // coordinate indices (tmp_arr[0], tmp_arr[1], ...) across each
@@ -543,12 +636,12 @@ bool ArrayCrossNumber::digit_shake_with_dependencies() {
           tmp_arr.push_back(element_index);
         }
 
-        // Set the chosen dependency values in the Hint environment
+        // Set the chosen dependency values in the Hint environment via direct
+        // slot indexing
         for (size_t j = 0; j < tmp_arr.size(); j++) {
-          h.set_env(dependencies[j],
-                    dependencies_possible_values[j][tmp_arr[j]]);
+          h.set_slot_env(dep_slots[j],
+                         dependencies_possible_values[j][tmp_arr[j]]);
         }
-
         // Execute the clue's AST script with the current dependency assignment
         h.run_program_on_dependency();
 
@@ -582,8 +675,9 @@ bool ArrayCrossNumber::digit_shake_with_dependencies() {
       }
       h.possible_values = std::move(updated_possible_values);
       h.number_possible_values = h.possible_values.size();
+      h.finalize_candidates();
 
-      std::cout << "  " << clue_name << " reduced from " << old_possible_count
+      std::cout << "  " << clue_name << " reduced from "
                 << " to " << h.number_possible_values << " candidates";
       if (h.number_possible_values <= 20) {
         std::cout << " [";
@@ -600,16 +694,11 @@ bool ArrayCrossNumber::digit_shake_with_dependencies() {
     // If no clues were reduced during this entire pass, we have reached
     // convergence
     if (!pass_changed) {
-      std::cout
-          << "\nConvergence reached: no further reductions achieved in pass "
-          << pass_number << "." << std::endl;
       break;
     }
-
-    pass_number++;
   }
-  std::cout << "digit_shake_with_dependencies completed successfully."
-            << std::endl;
+  // std::cout << "digit_shake_with_dependencies completed successfully."
+  // << std::endl;
 
   return !any_overall_change;
 }

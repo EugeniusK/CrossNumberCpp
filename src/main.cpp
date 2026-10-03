@@ -75,7 +75,7 @@ int main(int argc, char* argv[]) {
 
   CoutSilencer silencer(!verbose);
 
-  for (int i = 0; i < 1; ++i) {
+  for (int i = 0; i < 10; ++i) {
     try {
       PuzzleData puzzle = load_puzzle(puzzle_file);
       const std::vector<int>& ryder = puzzle.grid;
@@ -118,14 +118,9 @@ int main(int argc, char* argv[]) {
         hints.push_back(std::move(hint));
       }
 
-      std::cout << "start" << std::endl;
+      b.init_intersections();
 
-      // while (true) {
-      //   if (b.digit_shake()) {
-      //     break;
-      //   }
-      // }
-      // b.digit_shake_with_dependencies();
+      std::cout << "start" << std::endl;
 
       while (true) {
         if (b.digit_shake()) {
@@ -133,11 +128,22 @@ int main(int argc, char* argv[]) {
         }
       }
       b.digit_shake_with_dependencies();
+
       while (true) {
         if (b.digit_shake()) {
           break;
         }
       }
+      std::cout << "start dep" << std::endl;
+
+      // b.digit_shake_with_dependencies();
+      // std::cout << "start digit" << std::endl;
+
+      // while (true) {
+      //   if (b.digit_shake()) {
+      //     break;
+      //   }
+      // }
       solver_one.solve(b);
 
     } catch (const std::exception& e) {

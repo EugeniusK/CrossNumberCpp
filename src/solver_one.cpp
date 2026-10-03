@@ -1,13 +1,26 @@
 #include "solver_one.h"
 
 #include <algorithm>
+#include <chrono>
+#include <iomanip>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "backtrackstack.h"
-#include "builtin.h"
+
+static std::string format_number(long long n) {
+  if (n < 0) return "-" + format_number(-n);
+  std::string s = std::to_string(n);
+  int insert_pos = static_cast<int>(s.length()) - 3;
+  while (insert_pos > 0) {
+    s.insert(insert_pos, ",");
+    insert_pos -= 3;
+  }
+  return s;
+}
+
 void SolverOne::solve(ArrayCrossNumber crossnumber) {
   std::vector<int> guesses(crossnumber.hints.size(), 0);
   int number_guesses = 0;
@@ -24,6 +37,59 @@ void SolverOne::solve(ArrayCrossNumber crossnumber) {
             [](const Hint& a, const Hint& b) {
               return a.number_possible_values < b.number_possible_values;
             });
+
+  auto start_time = std::chrono::steady_clock::now();
+  auto last_update_time = start_time;
+  long long combinations_explored = 0;
+  double max_progress = 0.0;
+
+  auto compute_progress = [&]() -> double {
+    double prog = 0.0;
+    double weight = 1.0;
+    for (size_t i = 0; i < crossnumber.hints.size(); ++i) {
+      int total_m = crossnumber.hints[i].get().number_possible_values;
+      if (total_m <= 0) break;
+      int g = (i < static_cast<size_t>(number_guesses)) ? guesses[i] : 0;
+      prog += (static_cast<double>(g) / total_m) * weight;
+      weight /= total_m;
+      if (weight < 1e-15) break;
+    }
+    return std::clamp(prog, 0.0, 1.0);
+  };
+
+  auto render_progress = [&](bool done = false) {
+    auto now = std::chrono::steady_clock::now();
+    double elapsed_sec =
+        std::chrono::duration<double>(now - start_time).count();
+    double rate = elapsed_sec > 0.05
+                      ? static_cast<double>(combinations_explored) / elapsed_sec
+                      : 0.0;
+
+    double prog = done ? 1.0 : max_progress;
+    double pct = prog * 100.0;
+
+    const int bar_width = 25;
+    int filled = std::clamp(static_cast<int>(prog * bar_width), 0, bar_width);
+    std::string bar = "";
+    for (int i = 0; i < filled; ++i) bar += "█";
+    for (int i = filled; i < bar_width; ++i) bar += "░";
+
+    std::cout << "\r[Solver] [" << bar << "] " << std::fixed
+              << std::setprecision(1) << pct << "% | "
+              << "Explored: " << format_number(combinations_explored) << " | "
+              << "Depth: " << number_guesses << "/" << crossnumber.hints.size();
+
+    if (rate >= 1e6) {
+      std::cout << " (" << std::fixed << std::setprecision(2) << (rate / 1e6)
+                << "M/s)";
+    } else if (rate >= 1e3) {
+      std::cout << " (" << std::fixed << std::setprecision(1) << (rate / 1e3)
+                << "k/s)";
+    } else {
+      std::cout << " (" << static_cast<int>(rate) << "/s)";
+    }
+    std::cout << "    " << std::flush;
+  };
 
   while (true) {
     if (forward) {
@@ -59,6 +125,19 @@ void SolverOne::solve(ArrayCrossNumber crossnumber) {
       backtrack = !stack_can_increment_top;
     } else {
       // has just forward or increment
+      combinations_explored++;
+      if ((combinations_explored & 1023) == 0) {
+        auto now = std::chrono::steady_clock::now();
+        if (now - last_update_time >= std::chrono::milliseconds(100)) {
+          double cur_p = compute_progress();
+          if (cur_p > max_progress) {
+            max_progress = cur_p;
+          }
+          render_progress(false);
+          last_update_time = now;
+        }
+      }
+
       if (crossnumber.try_values(guesses, number_guesses)) {
         if (number_guesses == crossnumber.hints.size()) {
           crossnumber.apply_values(guesses, number_guesses);
@@ -96,8 +175,11 @@ void SolverOne::solve(ArrayCrossNumber crossnumber) {
           }
 
           if (with_valid_dependencies) {
-            std::cout << crossnumber.display_value() << std::endl;
-            std::cout << crossnumber.display_digit_count() << std::endl;
+            std::cout << "\r" << std::string(100, ' ') << "\r";
+            std::cout << "solved" << std::endl;
+            // std::cout << crossnumber.display_value() << std::endl;
+            // std::cout << crossnumber.display_digit_count() << std::endl;
+            last_update_time = std::chrono::steady_clock::now();
           }
 
           crossnumber.clear_values(guesses, number_guesses);
@@ -115,6 +197,10 @@ void SolverOne::solve(ArrayCrossNumber crossnumber) {
       }
     }
   }
+
+  std::cout << "\r" << std::string(100, ' ') << "\r";
+  render_progress(true);
+  std::cout << std::endl;
 
   crossnumber.apply_values(guesses, number_guesses);
   crossnumber.clear_values(guesses, number_guesses);

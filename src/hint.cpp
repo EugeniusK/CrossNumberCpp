@@ -21,7 +21,7 @@ std::vector<std::string> Hint::get_dependencies() const {
   return {list_dependencies.begin(), list_dependencies.end()};
 }
 
-void Hint::set_env(std::string variable_name, int val) {
+void Hint::set_env(const std::string& variable_name, int val) {
   env.set_var(variable_name, val);
 }
 

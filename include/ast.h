@@ -6,12 +6,32 @@
 #include <unordered_map>
 #include <vector>
 
+#include "builtin.h"
+
 class Environment {
  public:
-  std::unordered_map<std::string, int>::iterator find_var(std::string id);
+  Environment();
+
+  // Slot-based indexing
+  int get_or_create_slot(const std::string& id);
+  int find_slot(const std::string& id) const;
+
+  int get_slot_value(int slot) const {
+    return slots_[slot];
+  }
+
+  void set_slot_value(int slot, int val) {
+    slots_[slot] = val;
+  }
+
+  // Name-based API
+  bool has_var(const std::string& id) const;
+  int get_var(const std::string& id) const;
+  void set_var(const std::string& id, int val);
+
+  std::unordered_map<std::string, int>::iterator find_var(const std::string& id);
   std::unordered_map<std::string, int>::iterator var_end();
-  int get_var(std::string id);
-  void set_var(std::string id, int val);
+
   void initialise_output_array(int len, int val = 0);
   void reset_output_array();
   int get_output_array(int idx);
@@ -25,7 +45,8 @@ class Environment {
   }
 
  private:
-  std::unordered_map<std::string, int> named_variable;
+  std::unordered_map<std::string, int> var_to_slot_;
+  std::vector<int> slots_;
   std::vector<int> output_array;
   std::vector<int> tmp_array;
   std::vector<int> written_output_indices;
@@ -94,11 +115,13 @@ class IndexReadNode : public ExprNode {
 class FunctionCallNode : public ExprNode {
  public:
   FunctionCallNode(std::string n, std::vector<std::unique_ptr<ExprNode>> a);
-  int evaluate(Environment& env);
+  int evaluate(Environment& env) override;
 
  private:
   std::string name;
   std::vector<std::unique_ptr<ExprNode>> args;
+  BuiltinFn fn_;
+  mutable std::vector<int> evaluated_args;
 };
 
 class StmtNode {

@@ -9,7 +9,7 @@
 class Hint : Parser {
  public:
   Hint(int identifier, int is_horizontal, std::string program = "");
-  void set_env(std::string variable_name, int val);
+  void set_env(const std::string& variable_name, int val);
   int get_output_array(int idx);
   const std::vector<int>& get_written_output_indices() const;
   bool get_if_has_dependencies() const;

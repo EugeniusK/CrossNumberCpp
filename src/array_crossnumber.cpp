@@ -276,12 +276,12 @@ void ArrayCrossNumber::clear_values(const std::vector<int>& arr, int count) {
   }
 }
 
-// TODO [Review Later]: Review digit_shake() for:
-// 1. Floating-point precision loss and overflow in init_product ==
-// final_product.
-// 2. Replacing double product comparison with exact bool changed tracking.
-// 3. In-place filtering to avoid repeated std::erase_if per digit.
 bool ArrayCrossNumber::digit_shake() {
+  for (Hint& h : this->hints) {
+    if (h.possible_values.empty()) {
+      return true;  // Already empty / contradiction reached
+    }
+  }
   // global tmp_digits that tracks digits 0~9 for all squares in puzzle
   // initialise as all digits being used
   std::vector<std::array<bool, 10>> tmp_digits(this->width * this->height,
@@ -290,10 +290,8 @@ bool ArrayCrossNumber::digit_shake() {
   for (Hint& h : this->hints) {
     // for all hints, initialise local tmp_array to keep track of whether digits
     // are used
-    std::vector<std::array<bool, 10>> tmp_array;
-    for (int l = 0; l < h.get_length(); l++) {
-      tmp_array.push_back({0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
-    }
+    std::vector<std::array<bool, 10>> tmp_array(h.get_length(),
+                                                {0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
 
     // populate tmp_array with digits used by the hint
     for (int n : h.possible_values) {
@@ -302,21 +300,17 @@ bool ArrayCrossNumber::digit_shake() {
       }
     }
 
+    bool is_hor = h.get_is_horizontal();
+    int x = h.get_x_pos();
+    int y = h.get_y_pos();
+    int len = h.get_length();
+
     // update global tmp_digits
-    for (int l = 0; l < h.get_length(); l++) {
-      if (h.get_is_horizontal()) {
-        for (int i = 0; i < 10; i++) {
-          tmp_digits[h.get_x_pos() + l + this->width * h.get_y_pos()][i] =
-              tmp_digits[h.get_x_pos() + l + this->width * h.get_y_pos()][i] &&
-              tmp_array[l][i];
-        }
-      } else {
-        for (int i = 0; i < 10; i++) {
-          tmp_digits[h.get_x_pos() + this->width * (h.get_y_pos() + l)][i] =
-              tmp_digits[h.get_x_pos() + this->width * (h.get_y_pos() + l)]
-                        [i] &&
-              tmp_array[l][i];
-        }
+    for (int l = 0; l < len; l++) {
+      int cell_idx =
+          is_hor ? (y * this->width + (x + l)) : ((y + l) * this->width + x);
+      for (int i = 0; i < 10; i++) {
+        tmp_digits[cell_idx][i] = tmp_digits[cell_idx][i] && tmp_array[l][i];
       }
     }
   }
@@ -327,28 +321,35 @@ bool ArrayCrossNumber::digit_shake() {
   }
   std::cout << "possible combinations: " << init_product << std::endl;
 
-  for (Hint& h : hints) {
+  bool changed = false;
+
+  for (Hint& h : this->hints) {
     int length = h.get_length();
-    for (int l = 0; l < h.get_length(); l++) {
-      if (h.get_is_horizontal()) {
-        for (int i = 0; i < 10; i++) {
-          if (!tmp_digits[h.get_x_pos() + l + width * h.get_y_pos()][i]) {
-            std::erase_if(h.possible_values, [=](int val) {
-              return get_nth_digit(val, l, length) == i;
-            });
-            h.number_possible_values = h.possible_values.size();
+    bool is_hor = h.get_is_horizontal();
+    int x = h.get_x_pos();
+    int y = h.get_y_pos();
+
+    // Precompute cell indices for all digit positions of this hint
+    std::vector<int> cell_indices(length);
+    for (int l = 0; l < length; l++) {
+      cell_indices[l] =
+          is_hor ? (y * this->width + (x + l)) : ((y + l) * this->width + x);
+    }
+
+    auto it = std::remove_if(
+        h.possible_values.begin(), h.possible_values.end(), [&](int val) {
+          for (int l = 0; l < length; l++) {
+            int d = get_nth_digit(val, l, length);
+            if (!tmp_digits[cell_indices[l]][d]) {
+              return true;  // Digit not allowed at this square -> discard value
+            }
           }
-        }
-      } else {
-        for (int i = 0; i < 10; i++) {
-          if (!tmp_digits[h.get_x_pos() + width * (h.get_y_pos() + l)][i]) {
-            std::erase_if(h.possible_values, [=](int val) {
-              return get_nth_digit(val, l, length) == i;
-            });
-            h.number_possible_values = h.possible_values.size();
-          }
-        }
-      }
+          return false;  // Valid
+        });
+    if (it != h.possible_values.end()) {
+      h.possible_values.erase(it, h.possible_values.end());
+      h.number_possible_values = static_cast<int>(h.possible_values.size());
+      changed = true;
     }
   }
 
@@ -358,7 +359,7 @@ bool ArrayCrossNumber::digit_shake() {
   }
   std::cout << "possible combinations: " << final_product << std::endl;
 
-  return init_product == final_product;
+  return !changed;
 }
 
 bool ArrayCrossNumber::digit_shake_with_dependencies() {
@@ -432,6 +433,14 @@ bool ArrayCrossNumber::digit_shake_with_dependencies() {
                 << " current candidates = " << old_possible_count
                 << ", dependency combinations = " << combinations_count
                 << std::endl;
+      if (h.number_possible_values <= 20) {
+        std::cout << " [";
+        for (size_t k = 0; k < h.possible_values.size(); k++) {
+          std::cout << h.possible_values[k]
+                    << (k + 1 < h.possible_values.size() ? ", " : "");
+        }
+        std::cout << "]\n";
+      }
 
       // STEP 3: Gather dependency lists and candidate values
       std::vector<std::string> dependencies = h.get_dependencies();
@@ -447,12 +456,19 @@ bool ArrayCrossNumber::digit_shake_with_dependencies() {
           // Digit count dependency: candidate values 0, 1, ..., width * height
           std::vector<int> c_vals(this->width * this->height + 1);
           std::iota(c_vals.begin(), c_vals.end(), 0);
-          dependencies_number_possible_values.push_back(
-              static_cast<int>(c_vals.size()));
+          int count_val_size = static_cast<int>(c_vals.size());
+          dependencies_number_possible_values.push_back(count_val_size);
           dependencies_possible_values.push_back(std::move(c_vals));
-          std::cout << s << " (count var, " << (this->width * this->height + 1)
-                    << " values) ";
-          total_combinations *= (this->width * this->height + 1);
+          std::cout << s << " (count var, " << count_val_size << " values";
+          if (count_val_size <= 20) {
+            std::cout << " [";
+            for (int k = 0; k < count_val_size; k++) {
+              std::cout << k << (k + 1 < count_val_size ? ", " : "");
+            }
+            std::cout << "]";
+          }
+          std::cout << ") ";
+          total_combinations *= count_val_size;
         } else {
           Hint& dep = get_hint(s);
           if (dep.number_possible_values == 0) {
@@ -461,7 +477,16 @@ bool ArrayCrossNumber::digit_shake_with_dependencies() {
           dependencies_number_possible_values.push_back(
               dep.number_possible_values);
           dependencies_possible_values.push_back(dep.possible_values);
-          std::cout << s << " (" << dep.number_possible_values << " values) ";
+          std::cout << s << " (" << dep.number_possible_values << " values";
+          if (dep.number_possible_values <= 20) {
+            std::cout << " [";
+            for (size_t k = 0; k < dep.possible_values.size(); k++) {
+              std::cout << dep.possible_values[k]
+                        << (k + 1 < dep.possible_values.size() ? ", " : "");
+            }
+            std::cout << "]";
+          }
+          std::cout << ") ";
           total_combinations *= dep.number_possible_values;
         }
       }
@@ -560,7 +585,7 @@ bool ArrayCrossNumber::digit_shake_with_dependencies() {
 
       std::cout << "  " << clue_name << " reduced from " << old_possible_count
                 << " to " << h.number_possible_values << " candidates";
-      if (h.number_possible_values <= 10) {
+      if (h.number_possible_values <= 20) {
         std::cout << " [";
         for (size_t k = 0; k < h.possible_values.size(); k++) {
           std::cout << h.possible_values[k]

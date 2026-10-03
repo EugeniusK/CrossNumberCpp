@@ -10,19 +10,19 @@
 #include "builtin.h"
 
 std::unordered_map<std::string, int>::iterator Environment::find_var(
-    std::string id) {
+    const std::string& id) {
   return named_variable.find(id);
-};
+}
 std::unordered_map<std::string, int>::iterator Environment::var_end() {
   return named_variable.end();
 }
-int Environment::get_var(std::string id) { return named_variable[id]; };
-void Environment::set_var(std::string id, int val) {
+int Environment::get_var(const std::string& id) { return named_variable[id]; }
+void Environment::set_var(const std::string& id, int val) {
   if (id == "OUTPUT_ARRAY_LENGTH" || id == "TMP_ARRAY_LENGTH") {
     throw std::runtime_error("Cannot modify reserved variable " + id);
-  };
+  }
   named_variable[id] = val;
-};
+}
 
 void Environment::initialise_tmp_array(int len, int val) {
   tmp_array.assign(len, val);
@@ -109,7 +109,7 @@ int VariableNode::evaluate(Environment& env) {
   if (result == env.var_end()) {
     throw std::runtime_error("Undefined variable: " + name);
   }
-  return env.get_var(name);
+  return result->second;
 }
 
 UnaryOpNode::UnaryOpNode(std::string o, std::unique_ptr<ExprNode> expr)
@@ -174,22 +174,23 @@ int IndexReadNode::evaluate(Environment& env) {
 
 FunctionCallNode::FunctionCallNode(std::string n,
                                    std::vector<std::unique_ptr<ExprNode>> a)
-    : name(std::move(n)), args(std::move(a)) {}
-
-int FunctionCallNode::evaluate(Environment& env) {
+    : name(std::move(n)), args(std::move(a)) {
   const auto& table = get_builtin_functions();
   auto it = table.find(name);
   if (it == table.end()) {
     throw std::runtime_error("Unknown function: " + name);
   }
-
-  std::vector<int> evaluated_args;
+  fn_ = it->second;
   evaluated_args.reserve(args.size());
+}
+
+int FunctionCallNode::evaluate(Environment& env) {
+  evaluated_args.clear();
   for (const auto& arg : args) {
     evaluated_args.push_back(arg->evaluate(env));
   }
-  return it->second(evaluated_args);
-};
+  return fn_(evaluated_args);
+}
 
 void BlockStmtNode::add_statement(std::unique_ptr<StmtNode> stmt) {
   statements.push_back(std::move(stmt));
@@ -199,24 +200,29 @@ void BlockStmtNode::execute(Environment& env) {
 }
 
 VarDeclNode::VarDeclNode(std::string n, std::unique_ptr<ExprNode> i)
-    : name(std::move(n)), init(std::move(i)) {}
-void VarDeclNode::execute(Environment& env) {
-  if (is_reserved_variable_name(name)) {
+    : name(std::move(n)), init(std::move(i)) {
+  if (name == "OUTPUT_ARRAY_LENGTH" || name == "TMP_ARRAY_LENGTH" ||
+      is_reserved_variable_name(name)) {
     throw std::runtime_error("Cannot declare to reserved variable: " + name);
   }
+}
+void VarDeclNode::execute(Environment& env) {
   env.set_var(name, init->evaluate(env));
 }
 
 AssignStmtNode::AssignStmtNode(std::string n, std::unique_ptr<ExprNode> e)
-    : name(std::move(n)), expr(std::move(e)) {}
-void AssignStmtNode::execute(Environment& env) {
-  if (env.find_var(name) == env.var_end()) {
-    throw std::runtime_error("Assignment to undeclared: " + name);
-  }
-  if (is_reserved_variable_name(name)) {
+    : name(std::move(n)), expr(std::move(e)) {
+  if (name == "OUTPUT_ARRAY_LENGTH" || name == "TMP_ARRAY_LENGTH" ||
+      is_reserved_variable_name(name)) {
     throw std::runtime_error("Cannot assign to reserved variable: " + name);
   }
-  env.set_var(name, expr->evaluate(env));
+}
+void AssignStmtNode::execute(Environment& env) {
+  auto it = env.find_var(name);
+  if (it == env.var_end()) {
+    throw std::runtime_error("Assignment to undeclared: " + name);
+  }
+  it->second = expr->evaluate(env);
 }
 
 IndexAssignStmtNode::IndexAssignStmtNode(std::string n,
